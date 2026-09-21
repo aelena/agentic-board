@@ -38,9 +38,7 @@ def effective_spec(*layers: LlmSpec | None) -> LlmSpec:
     return out
 
 
-def make_agent(
-    spec: AgentSpec, mode: Mode, board: BoardSpec, request_llm: LlmSpec | None, settings: Settings
-) -> Agent:
+def make_agent(spec: AgentSpec, mode: Mode, board: BoardSpec, request_llm: LlmSpec | None, settings: Settings) -> Agent:
     p, t = spec.persona(mode), board.prompts
     role, focus = p.role or spec.role, p.focus or spec.focus
     tone = t.hostile_tone if mode == "hostile" else t.coaching_tone
@@ -106,11 +104,7 @@ def run_phase(
                 )
             )
             if i + 1 < len(agents):
-                emit(
-                    Event(
-                        type="agent_start", run_id=run_id, phase=mode, agent_id=ids[i + 1], role=roles[i + 1]
-                    )
-                )
+                emit(Event(type="agent_start", run_id=run_id, phase=mode, agent_id=ids[i + 1], role=roles[i + 1]))
 
         return cb
 
@@ -196,7 +190,7 @@ def run_board(
     run_id: str | None = None,
 ) -> RunResult:
     """Run the requested phases (default: the board's) and return a full RunResult."""
-    wanted = [p for p in ALL_PHASES if p in (phases or board.phases)]
+    wanted = [p for p in ALL_PHASES if p in (board.phases if phases is None else phases)]
     if not wanted:
         raise RunError("no phases selected")
     result = RunResult(
@@ -212,15 +206,11 @@ def run_board(
     try:
         hostile = coaching = None
         if "hostile" in wanted:
-            hostile = run_phase(
-                board, "hostile", result.idea, None, result.id, request_llm, settings, emit, execute
-            )
+            hostile = run_phase(board, "hostile", result.idea, None, result.id, request_llm, settings, emit, execute)
             result.phases.append(hostile)
         if "coaching" in wanted:
             fb = hostile.as_markdown() if hostile else None
-            coaching = run_phase(
-                board, "coaching", result.idea, fb, result.id, request_llm, settings, emit, execute
-            )
+            coaching = run_phase(board, "coaching", result.idea, fb, result.id, request_llm, settings, emit, execute)
             result.phases.append(coaching)
         if "synthesis" in wanted:
             pitch, secs = run_synthesis(

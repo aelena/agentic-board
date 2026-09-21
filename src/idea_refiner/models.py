@@ -84,7 +84,9 @@ class Prompts(BaseModel):
     expected_output: str = (
         "A focused, expert-level critique or advice in up to {sentences} sentences, specific to this idea."
     )
-    synthesis_expected: str = "A compelling, concise pitch that shows defensibility, security, compliance, scalability, and user value."
+    synthesis_expected: str = (
+        "A compelling, concise pitch that shows defensibility, security, compliance, scalability, and user value."
+    )
     sentences: int = 5
     synthesis_sentences: int = 3
 

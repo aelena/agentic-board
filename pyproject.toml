@@ -12,7 +12,7 @@ license = { text = "MIT" }
 authors = [{ name = "aelena", email = "antonioelena@gmail.com" }]
 keywords = ["crewai", "agents", "llm", "ollama", "startup", "critique"]
 dependencies = [
-  "crewai>=0.100",
+  "crewai[litellm]>=1.0",
   "pydantic>=2.7",
   "pydantic-settings>=2.3",
   "pyyaml>=6.0",
@@ -25,7 +25,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.6"]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.6", "sanic-testing>=24.6"]
 pdf = ["markdown>=3.6", "weasyprint>=62"]
 
 [project.scripts]
@@ -35,11 +35,12 @@ refiner = "idea_refiner.cli:app"
 packages = ["src/idea_refiner"]
 
 [tool.ruff]
-line-length = 110
+line-length = 120
 target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]  # the formatter wraps code; long strings are fine
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

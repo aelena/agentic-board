@@ -19,6 +19,7 @@ os.environ.setdefault("CREWAI_TELEMETRY_OPT_OUT", "true")
 os.environ.setdefault("OTEL_SDK_DISABLED", "true")
 # CrewAI's LLM model validator trips a noisy pydantic UserWarning on every construction.
 warnings.filterwarnings("ignore", message="A custom validator is returning a value other than `self`")
+warnings.filterwarnings("ignore", message="function callbacks cannot be serialized")
 
 
 class Provider(BaseModel):
@@ -41,12 +42,8 @@ PROVIDERS: dict[str, Provider] = {
     p.name: p
     for p in (
         Provider(name="openai", prefix="openai", default_model="gpt-4o", key_env="OPENAI_API_KEY"),
-        Provider(
-            name="anthropic", prefix="anthropic", default_model="claude-sonnet-5", key_env="ANTHROPIC_API_KEY"
-        ),
-        Provider(
-            name="mistral", prefix="mistral", default_model="mistral-large-latest", key_env="MISTRAL_API_KEY"
-        ),
+        Provider(name="anthropic", prefix="anthropic", default_model="claude-sonnet-5", key_env="ANTHROPIC_API_KEY"),
+        Provider(name="mistral", prefix="mistral", default_model="mistral-large-latest", key_env="MISTRAL_API_KEY"),
         Provider(name="gemini", prefix="gemini", default_model="gemini-2.5-pro", key_env="GEMINI_API_KEY"),
         Provider(name="groq", prefix="groq", default_model="llama-3.3-70b-versatile", key_env="GROQ_API_KEY"),
         Provider(
@@ -88,9 +85,7 @@ AUTO_ORDER = ("openai", "anthropic", "mistral", "gemini", "groq", "openrouter", 
 class Settings(BaseSettings):
     """Process-wide defaults. ``REFINER_PROVIDER=ollama REFINER_MODEL=qwen2.5:14b`` etc."""
 
-    model_config = SettingsConfigDict(
-        env_prefix="REFINER_", env_file=".env", env_file_encoding="utf-8", extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_prefix="REFINER_", env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     provider: str | None = None  # None = auto-detect from available keys, else ollama
     model: str | None = None

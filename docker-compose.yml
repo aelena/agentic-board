@@ -1,0 +1,29 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Point at the bundled Ollama when using the `local` profile; cloud keys come from .env
+      REFINER_BASE_URL: ${REFINER_BASE_URL:-}
+    volumes:
+      - refiner-data:/data          # runs and user boards persist here
+      - ./boards:/data/boards:ro    # drop your own board YAMLs in ./boards
+
+  # `docker compose --profile local up` also starts Ollama.
+  # Then: docker compose exec ollama ollama pull llama3.1
+  # and set REFINER_PROVIDER=ollama REFINER_BASE_URL=http://ollama:11434 in .env
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["local"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+
+volumes:
+  refiner-data:
+  ollama-models:

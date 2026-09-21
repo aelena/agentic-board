@@ -54,11 +54,7 @@ def litellm_model(spec: LlmSpec) -> str:
     model = spec.model or prov.default_model
     if not model:
         raise ValueError(f"provider '{prov.name}' needs an explicit model")
-    return (
-        model
-        if "/" in model and prov.name not in ("openrouter", "openai-compatible")
-        else f"{prov.prefix}/{model}"
-    )
+    return model if "/" in model and prov.name not in ("openrouter", "openai-compatible") else f"{prov.prefix}/{model}"
 
 
 def build_llm(spec: LlmSpec, settings: Settings) -> LLM:
@@ -85,7 +81,5 @@ def build_llm(spec: LlmSpec, settings: Settings) -> LLM:
 def describe(spec: LlmSpec, settings: Settings) -> str:
     spec = spec.merged(spec_from_settings(settings))
     return litellm_model(spec) + (
-        f" @ {spec.base_url or PROVIDERS[spec.provider].base_url or ''}"
-        if PROVIDERS[spec.provider].local
-        else ""
+        f" @ {spec.base_url or PROVIDERS[spec.provider].base_url or ''}" if PROVIDERS[spec.provider].local else ""
     )
