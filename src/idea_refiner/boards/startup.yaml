@@ -1,0 +1,47 @@
+# The original "AI Investor Board" from the notebook: five hostile investors/executives,
+# the same five as coaches, and a founder who synthesizes everything into a pitch.
+name: startup
+description: >
+  Stress-test an AI startup idea in front of a VC, a scaling CTO, a product manager,
+  a general counsel and a CISO. Hostile round, coaching round, founder synthesis.
+
+agents:
+  - id: vc
+    role: Hardened Venture Capitalist
+    focus: lack of defensibility and market fit
+    coach:
+      role: Venture Capitalist (Coach)
+      focus: building defensible moats
+
+  - id: cto
+    role: Scaling CTO
+    focus: technical debt and scalability risks
+    coach:
+      role: CTO (Coach)
+      focus: robust, scalable architecture
+
+  - id: pm
+    role: Product Manager
+    focus: poor user adoption and workflow fit
+    coach:
+      role: Product Manager (Coach)
+      focus: user-centered design
+
+  - id: gc
+    role: General Counsel
+    focus: legal liability and regulatory non-compliance
+    coach:
+      role: General Counsel (Coach)
+      focus: compliance-by-design
+
+  - id: ciso
+    role: CISO / Grey-Hat Hacker
+    focus: security vulnerabilities and data exposure
+    coach:
+      role: CISO (Coach)
+      focus: zero-trust security
+
+synthesizer:
+  role: Startup Founder
+  goal: Synthesize all feedback into a concise, investor-ready value proposition
+  backstory: You are a resilient founder who turns brutal feedback into breakthrough strategy.

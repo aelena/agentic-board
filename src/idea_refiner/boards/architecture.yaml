@@ -1,0 +1,49 @@
+# A second built-in board to show the format generalises beyond startups:
+# review a software architecture / technical design.
+name: architecture
+description: >
+  Design review board for a software architecture proposal: reliability, security,
+  data, cost and operability, then a lead architect rewrites the proposal.
+
+agents:
+  - id: sre
+    role: Principal SRE
+    focus: single points of failure, unbounded queues and untested failover
+    coach: { role: SRE (Coach), focus: designing for graceful degradation and observability }
+  - id: security
+    role: Application Security Architect
+    focus: trust boundaries nobody drew and secrets nobody rotated
+    coach: { role: Security Architect (Coach), focus: threat modelling and least privilege }
+  - id: data
+    role: Data Architect
+    focus: schemas that cannot migrate and consistency models nobody understood
+    coach: { role: Data Architect (Coach), focus: evolvable schemas and clear ownership }
+  - id: finops
+    role: Cloud Cost Engineer
+    focus: architectures whose bill grows faster than their revenue
+    coach: { role: Cost Engineer (Coach), focus: cost-aware design and right-sizing }
+  - id: ops
+    role: Platform Engineering Lead
+    focus: systems that were impossible to deploy, debug or hand over
+    coach: { role: Platform Lead (Coach), focus: paved roads and boring operations }
+
+synthesizer:
+  role: Lead Architect
+  goal: Rewrite the proposal so it survives the review
+  backstory: You have shipped and operated large systems and know which review comments actually matter.
+
+prompts:
+  synthesis_task: |
+    ## Proposal
+    {idea}
+
+    ## Review findings
+    {hostile_feedback}
+
+    ## Recommendations
+    {coaching_advice}
+
+    Rewrite the proposal as a {sentences}-paragraph architecture summary that addresses every finding,
+    then list the concrete design changes as bullets.
+  synthesis_expected: A revised architecture summary plus a bullet list of design changes.
+  synthesis_sentences: 3

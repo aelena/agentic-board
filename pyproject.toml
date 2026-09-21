@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "idea-refiner"
+version = "0.1.0"
+description = "Agentic AI boardroom: configurable multi-agent boards that stress-test and refine ideas. CLI + REST API + web UI."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "aelena", email = "antonioelena@gmail.com" }]
+keywords = ["crewai", "agents", "llm", "ollama", "startup", "critique"]
+dependencies = [
+  "crewai>=0.100",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  "pyyaml>=6.0",
+  "typer>=0.12",
+  "rich>=13.7",
+  "httpx>=0.27",
+  "sanic>=24.6",
+  "sanic-ext>=23.12",
+  "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.6"]
+pdf = ["markdown>=3.6", "weasyprint>=62"]
+
+[project.scripts]
+refiner = "idea_refiner.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/idea_refiner"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
