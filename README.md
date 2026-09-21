@@ -215,6 +215,9 @@ Design notes:
   history. Guidelines are per project, never global.
 - **Board deliberation**: agents read and rebut each other over configurable rounds, optionally chaired,
   ending in scored verdicts so consensus and dissent are explicit, instead of five monologues and a summary.
+- **Support agents**: a scribe (minutes and notes), a cross-checker (contradictions and unsupported
+  claims across agents), a deep researcher (grounded briefings via search and MCP knowledge bases) and
+  configurable synthesizers, supporting the main board members.
 - **Agent memory**: each agent's thinking stored as inspectable notes so an idea can be refined over
   several turns.
 - **Structured output**: upload a JSON template and get schema-validated agent output.
