@@ -58,6 +58,9 @@ Copy `.env.example` to `.env` and set what you use. Vendor keys keep their stand
 The provider is auto-detected from the keys present, falling back to a local Ollama. Force it with
 `REFINER_PROVIDER` / `REFINER_MODEL` in `.env`, or per run with `--provider` / `--model` / `--base-url`.
 
+Local models: Ollama 0.3 or newer is needed for Llama 3.2 class models, and a 3B model wants roughly 4 GB
+of free RAM. `refiner check` tells you quickly whether the endpoint can actually serve the model.
+
 ```bash
 refiner providers                       # what is configured
 refiner check                           # one tiny call to confirm key + endpoint work
