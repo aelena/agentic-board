@@ -9,6 +9,14 @@ from idea_refiner.llm import LlmSpec
 IDEA = "A two-pass legal document comparison system that runs locally with Qdrant and FastAPI."
 
 
+def test_full_run_shares_llm_objects_across_agents(startup, settings, execute):
+    from idea_refiner.llm import _LLM_CACHE, clear_cache
+
+    clear_cache()
+    run_board(startup, IDEA, settings=settings, execute=execute)
+    assert len(_LLM_CACHE) == 1  # 11 agents, one resolved spec, one client
+
+
 def test_full_run_collects_every_agent(startup, settings, execute):
     events = []
     r = run_board(startup, IDEA, settings=settings, emit=events.append, execute=execute)

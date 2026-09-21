@@ -87,3 +87,17 @@ def test_provider_autodetect(monkeypatch):
     monkeypatch.setenv("MISTRAL_API_KEY", "x")
     assert Settings(provider=None).resolved_provider() == "mistral"
     assert Settings(provider="groq").resolved_provider() == "groq"
+
+
+def test_build_llm_is_cached_per_resolved_spec():
+    from idea_refiner.llm import clear_cache
+
+    clear_cache()
+    s = Settings(provider="ollama", model="llama3.1")
+    a = build_llm(LlmSpec(), s)
+    assert build_llm(LlmSpec(provider="ollama", model="llama3.1"), s) is a  # same resolved spec, same object
+    assert build_llm(LlmSpec(model="qwen2.5:14b"), s) is not a
+    assert build_llm(LlmSpec(temperature=0.9), s) is not a
+    assert build_llm(LlmSpec(), Settings(provider="ollama", model="llama3.1", timeout=5)) is not a
+    clear_cache()
+    assert build_llm(LlmSpec(), s) is not a

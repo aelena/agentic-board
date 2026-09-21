@@ -27,7 +27,7 @@ from .. import __version__, boards, report
 from ..boards import BoardError
 from ..config import PROVIDERS, Settings
 from ..config import settings as default_settings
-from ..engine import Execute, crew_execute, run_board
+from ..engine import Execute, crew_execute, run_board, warm_up
 from ..models import Event, RunRequest
 from .store import TERMINAL, RunState, RunStore
 
@@ -62,6 +62,11 @@ def create_app(
     app.ctx.settings = settings
     app.ctx.store = RunStore(settings.runs_dir)
     app.ctx.execute = execute
+
+    @app.after_server_start
+    async def _warm(app_, _loop):
+        # crewai import + default LLM client, off the event loop, so the first run does not pay for it
+        app_.add_task(asyncio.to_thread(warm_up, settings))
 
     async def _run(st: RunState) -> None:
         store: RunStore = app.ctx.store

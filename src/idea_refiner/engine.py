@@ -9,16 +9,18 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-
-from crewai import Agent, Crew, Process, Task
+from typing import TYPE_CHECKING
 
 from .config import Settings
 from .config import settings as default_settings
 from .llm import LlmSpec, build_llm, describe
 from .models import ALL_PHASES, AgentOutput, AgentSpec, BoardSpec, Event, Mode, Phase, PhaseResult, RunResult
 
+if TYPE_CHECKING:
+    from crewai import Agent, Task
+
 Emit = Callable[[Event], None]
-Execute = Callable[[list[Agent], list[Task]], list[str]]  # returns one raw output per task, in order
+Execute = Callable[["list[Agent]", "list[Task]"], list[str]]  # returns one raw output per task, in order
 
 
 class RunError(Exception):
@@ -27,6 +29,17 @@ class RunError(Exception):
 
 def _noop(_: Event) -> None:
     pass
+
+
+def warm_up(settings: Settings = default_settings, spec: LlmSpec | None = None) -> None:
+    """Pay the one-off costs up front: importing crewai (seconds) and building the default LLM client
+    (loads the CA store). Errors are ignored; a misconfigured default provider fails loudly at run time."""
+    import contextlib
+
+    import crewai  # noqa: F401
+
+    with contextlib.suppress(Exception):
+        build_llm(spec or LlmSpec(), settings)
 
 
 def effective_spec(*layers: LlmSpec | None) -> LlmSpec:
@@ -43,6 +56,8 @@ def make_agent(spec: AgentSpec, mode: Mode, board: BoardSpec, request_llm: LlmSp
     role, focus = p.role or spec.role, p.focus or spec.focus
     tone = t.hostile_tone if mode == "hostile" else t.coaching_tone
     fmt = dict(role=role, focus=focus, tone=tone)
+    from crewai import Agent
+
     return Agent(
         role=role,
         goal=(p.goal or t.goal).format(**fmt),
@@ -56,6 +71,8 @@ def make_agent(spec: AgentSpec, mode: Mode, board: BoardSpec, request_llm: LlmSp
 
 def make_synthesizer(board: BoardSpec, request_llm: LlmSpec | None, settings: Settings) -> Agent:
     s = board.synthesizer
+    from crewai import Agent
+
     return Agent(
         role=s.role,
         goal=s.goal,
@@ -68,6 +85,8 @@ def make_synthesizer(board: BoardSpec, request_llm: LlmSpec | None, settings: Se
 
 def crew_execute(agents: list[Agent], tasks: list[Task]) -> list[str]:
     """Default executor: one sequential CrewAI crew, every task's raw output returned."""
+    from crewai import Crew, Process
+
     out = Crew(agents=agents, tasks=tasks, process=Process.sequential, verbose=False).kickoff()
     return [t.raw for t in out.tasks_output]
 
@@ -90,6 +109,7 @@ def run_phase(
     agents = [make_agent(a, mode, board, request_llm, settings) for a in board.agents]
     roles = [a.role for a in agents]
     ids = [a.id for a in board.agents]
+    from crewai import Task
 
     def on_done(i: int):
         def cb(output):
@@ -148,6 +168,8 @@ def run_synthesis(
 ) -> tuple[str, float]:
     t = board.prompts
     agent = make_synthesizer(board, request_llm, settings)
+    from crewai import Task
+
     task = Task(
         description=t.synthesis_task.format(
             idea=idea,
@@ -202,6 +224,7 @@ def run_board(
     if run_id:
         result.id = run_id
     emit(Event(type="run_start", run_id=result.id, text=result.model))
+    warm_up(settings, effective_spec(request_llm, board.llm))  # keep import/SSL setup out of the timings
     t0 = time.perf_counter()
     try:
         hostile = coaching = None

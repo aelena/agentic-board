@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
-from crewai import LLM
+from typing import TYPE_CHECKING
+
 from pydantic import BaseModel
 
 from .config import PROVIDERS, Settings
+
+if TYPE_CHECKING:
+    from crewai import LLM
+
+# LLM objects are stateless HTTP clients, and building one costs ~1.7s on Windows (two httpx clients,
+# each loading the CA store). Share them across agents and runs, keyed by the fully resolved spec.
+_LLM_CACHE: dict[str, LLM] = {}
 
 
 class LlmSpec(BaseModel):
@@ -57,25 +65,38 @@ def litellm_model(spec: LlmSpec) -> str:
     return model if "/" in model and prov.name not in ("openrouter", "openai-compatible") else f"{prov.prefix}/{model}"
 
 
-def build_llm(spec: LlmSpec, settings: Settings) -> LLM:
+def resolve(spec: LlmSpec, settings: Settings) -> LlmSpec:
+    """Fill the gaps in ``spec`` from settings and validate the provider."""
     spec = spec.merged(spec_from_settings(settings))
     prov = PROVIDERS.get(spec.provider or "")
     if prov is None:
         raise ValueError(f"unknown provider '{spec.provider}'. Known: {', '.join(PROVIDERS)}")
-    base_url = spec.base_url or prov.base_url
-    if prov.name == "openai-compatible" and not base_url:
+    if prov.name == "openai-compatible" and not (spec.base_url or prov.base_url):
         raise ValueError("provider 'openai-compatible' requires base_url")
+    return spec
+
+
+def build_llm(spec: LlmSpec, settings: Settings) -> LLM:
+    """CrewAI LLM for ``spec``; identical specs share one instance (see ``_LLM_CACHE``)."""
+    from crewai import LLM  # deferred: importing crewai takes seconds and most CLI commands never need it
+
+    spec = resolve(spec, settings)
+    key = spec.model_dump_json() + f"|{settings.timeout}"
+    if key in _LLM_CACHE:
+        return _LLM_CACHE[key]
+    prov = PROVIDERS[spec.provider]
     kwargs = dict(
-        model=litellm_model(spec),
-        temperature=spec.temperature,
-        max_tokens=spec.max_tokens,
-        timeout=settings.timeout,
+        model=litellm_model(spec), temperature=spec.temperature, max_tokens=spec.max_tokens, timeout=settings.timeout
     )
-    if base_url:
+    if base_url := spec.base_url or prov.base_url:
         kwargs["base_url"] = base_url
     if api_key := spec.api_key or prov.api_key:
         kwargs["api_key"] = api_key
-    return LLM(**kwargs)
+    return _LLM_CACHE.setdefault(key, LLM(**kwargs))
+
+
+def clear_cache() -> None:
+    _LLM_CACHE.clear()
 
 
 def describe(spec: LlmSpec, settings: Settings) -> str:
