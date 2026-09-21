@@ -173,7 +173,9 @@ def run(
     except typer.Exit:
         raise
     except Exception as e:  # noqa: BLE001 - LLM/provider errors: show a clean line, not a CrewAI trace
-        _fail(f"{type(e).__name__}: {e}")
+        target = describe(req.llm or LlmSpec(), settings)
+        hint = f"(while calling {target}; run `refiner check` with the same provider flags)"
+        _fail(f"{type(e).__name__}: {e}\n{hint}")
     _show(result, as_json, quiet)
 
 
