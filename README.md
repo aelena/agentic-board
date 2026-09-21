@@ -179,7 +179,13 @@ profile. Cloud keys in `.env` are passed through. Board YAMLs in `./boards` are 
 
 ## Web UI
 
-Svelte app in `web/`, served by the API from `web/dist` once built. Coming next.
+Svelte 5 app in `web/`: pick a board, provider and model, paste the idea, and watch each agent's card
+fill in live over SSE. Past runs are listed in the sidebar; reports download as Markdown.
+
+```bash
+cd web && npm install && npm run build   # produces web/dist, which `refiner serve` picks up at /
+npm run dev                              # dev server on :5173 proxying /api to :8000
+```
 
 ## Development
 
@@ -212,7 +218,7 @@ Design notes:
 
 ## Roadmap
 
-- **Web UI** (Svelte): boards, live run view over SSE, run history.
+- **Web UI**: board YAML editor and validator, run comparison.
 - **Projects**: one directory/resource per idea holding `idea.md`, project-level `guidelines.md`,
   `voice.md`, `style.md` injected into every agent, a mix of custom and built-in agents, runs and
   history. Guidelines are per project, never global.
