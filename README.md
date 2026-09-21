@@ -222,6 +222,9 @@ Design notes:
   several turns.
 - **Structured output**: upload a JSON template and get schema-validated agent output.
 - **Report templates**: render the report into a user-supplied `.docx` (corporate template).
+- **Agent tools**: `crewai_tools` built-ins referenced by name from YAML (scraper, search), then opt-in
+  user Python tool scripts loaded from a local plugin directory, disabled by default and never via upload
+  without explicit configuration.
 - **MCP servers**: user-configured MCP servers (internal tools, APIs, knowledge bases) exposed to agents
   as tools.
 - **Voice input**: record in the browser, transcribe, send to the board.
