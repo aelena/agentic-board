@@ -59,6 +59,11 @@
   let errorText = $derived(run.error ?? run.events.find((e) => e.type === 'error')?.text)
   let final = $derived(run.result?.verdict)
   const md = (t) => marked.parse(t || '')
+  let adopted = $state('')
+  async function adopt() {
+    try { const r = await api.adopt(run.result.project, run.id); adopted = `idea.md updated (previous kept as ${r.archived})` }
+    catch (e) { adopted = e.message }
+  }
   const tallyText = (t) => Object.entries(t.votes).map(([d, n]) => `${n} ${d}`).join(' · ') + (t.mean_score != null ? ` · mean ${t.mean_score}/10` : '')
   const title = (s) => TITLES[s.phase] + (s.round ? `, round ${s.round}` : '')
 </script>
@@ -70,12 +75,17 @@
       {#if live}<span class="badge running"><span class="spinner"></span> running</span>{:else if run.status === 'error'}<span class="badge error">error</span>{/if}
       {#if final?.decision}<span class="verdict v-{final.decision}">{final.decision}</span>{/if}
     </p>
-    <p class="muted" style="margin:0">run {run.id}{model ? ` | ${model}` : ''}{run.result?.seconds ? ` | ${Math.round(run.result.seconds)}s` : ''}</p>
+    <p class="muted" style="margin:0">{run.result?.project ?? run.project ? `project ${run.result?.project ?? run.project} | ` : ''}run {run.id}{model ? ` | ${model}` : ''}{run.result?.seconds ? ` | ${Math.round(run.result.seconds)}s` : ''}</p>
   </div>
   {#if run.result}
-    <div style="flex:0 0 auto"><a href={api.reportUrl(run.id)} download="report-{run.id}.md"><button>Download report.md</button></a></div>
+    <div style="flex:0 0 auto;display:flex;gap:8px">
+      {#if run.result.project && run.result.pitch}<button onclick={adopt} title="Replace the project's idea.md with this run's refined idea">Adopt as project idea</button>{/if}
+      <a href={api.reportUrl(run.id)} download="report-{run.id}.md"><button>Download report.md</button></a>
+    </div>
   {/if}
 </div>
+
+{#if adopted}<p class="muted">{adopted}</p>{/if}
 
 {#if idea}
   <div class="panel"><p class="muted" style="margin:0 0 4px">Idea</p><div class="md">{@html md(idea)}</div></div>

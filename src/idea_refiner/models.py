@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .llm import LlmSpec
 
@@ -178,6 +178,14 @@ class Prompts(BaseModel):
         "brief: what it is, for whom, how it works, the business model, and every piece of evidence and traction "
         "from the original that still holds. It goes back to the board on its own, so leave nothing implicit."
     )
+    project_context: str = (  # prepended to every task of a project run
+        "## Project context: {name}\nFollow these project guidelines in everything you write.\n\n{brief}\n\n"
+    )
+    memory_context: str = (  # prepended to a seat's tasks when it has notes from earlier sessions
+        "## Your notes from earlier sessions on this project\n"
+        "Build on them: do not relitigate points that were settled, and say so when your view has changed.\n\n"
+        "{notes}\n\n"
+    )
     verdict_format: str = VERDICT_FORMAT  # appended verbatim (not a template) to tasks that end in a verdict
     chair_format: str = CHAIR_FORMAT  # appended verbatim to the chair's task
 
@@ -279,15 +287,31 @@ class PhaseResult(BaseModel):
         return body + (f"\n\n**Board verdict:** {self.tally.as_text()}" if self.tally else "")
 
 
-class RunRequest(BaseModel):
-    """What the API/CLI accept to start a run."""
+class ProjectContext(BaseModel):
+    """What a project adds to every agent's prompt: its guidelines and each seat's memory."""
 
-    idea: str = Field(min_length=10)
-    board: str = "startup"
+    name: str
+    brief: str = ""  # guidelines.md + voice.md + style.md, rendered
+    memory: dict[str, str] = {}  # seat id -> notes from earlier runs; "board" for the chair and synthesizer
+
+
+class RunRequest(BaseModel):
+    """What the API/CLI accept to start a run. With ``project``, ``idea`` defaults to the project's idea.md
+    and ``board`` to the project's board."""
+
+    idea: str = ""
+    board: str | None = None
+    project: str | None = None
     llm: LlmSpec | None = None
     phases: list[Phase] | None = None
     title: str | None = None
-    refine: RefineSpec | None = None  # overrides the board's
+    refine: RefineSpec | None = None  # overrides the board's (and the project's)
+
+    @model_validator(mode="after")
+    def _idea_or_project(self):
+        if not self.project and len(self.idea.strip()) < 10:
+            raise ValueError("idea must be at least 10 characters (or name a project)")
+        return self
 
 
 class IterationSummary(BaseModel):
@@ -304,6 +328,7 @@ class RunResult(BaseModel):
     id: str = Field(default_factory=lambda: uuid4().hex[:12])
     title: str | None = None
     board: str
+    project: str | None = None
     idea: str
     model: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

@@ -173,6 +173,50 @@ Prompt templates live under `prompts:` and can be overridden per board (`goal`, 
 LLM resolution order, most specific wins: agent `llm` > request (`--provider`/`--model`, or the API
 body) > board `llm` > environment.
 
+## Projects: refine one idea over many sessions
+
+A project is a directory holding one idea and everything the board should know about it:
+
+```
+projects/<name>/
+  project.yaml       board, llm, refine defaults, which seats sit on the board
+  idea.md            the current statement of the idea
+  guidelines.md      injected into every agent's prompt (audience, constraints, non-negotiables)
+  voice.md           ditto (how outputs should sound)
+  style.md           ditto (format, length, terminology)
+  agents/*.yaml      custom agents, one AgentSpec per file, added to the board
+  memory/<seat>.md   each seat's notes from earlier runs: its verdict, issues and advice
+  memory/board.md    the board's outcomes, read by the chair and the synthesizer
+  runs/<id>/         result.json, report.md, board.json (the exact board that ran)
+  history/           earlier versions of idea.md
+```
+
+```bash
+refiner projects init flags -f idea.md -b startup
+$EDITOR projects/flags/guidelines.md
+refiner run -P flags --iterate 3        # idea, board, guidelines and memory come from the project
+refiner projects show flags --memory
+refiner projects adopt flags            # the latest refined idea becomes idea.md; the old one goes to history/
+refiner run -P flags                    # the board remembers what it said last time
+```
+
+Mix built-in and custom seats in `project.yaml`: a string keeps that seat from the board, a mapping adds
+a custom agent (or replaces the seat with the same id), and files in `agents/` are always added:
+
+```yaml
+board: startup
+agents:
+  - vc
+  - ciso
+  - {id: devrel, role: Developer Relations Lead, focus: developer tools nobody adopted}
+refine: {max_iterations: 3, target_score: 7}
+memory: true          # false = no notes written or read
+```
+
+Memory is plain Markdown written after each run from the verdicts and advice, with no extra LLM call.
+The most recent 4 entries per seat go into its prompts; the files keep everything, and you can edit
+or delete them. Guidelines are per project, never global.
+
 ## REST API
 
 ```bash
@@ -188,12 +232,17 @@ refiner serve --workers 4     # Linux/macOS; Windows always runs single-process
 | GET    | `/api/boards`                | all boards                                           |
 | GET    | `/api/boards/{name}`         | one board                                            |
 | POST   | `/api/boards/validate`       | `{yaml}` -> parsed board or 422 with the error       |
-| POST   | `/api/runs`                  | `{idea, board?, llm?, phases?, title?, refine?}` -> 202 `{id}` |
+| POST   | `/api/runs`                  | `{idea, board?, project?, llm?, phases?, title?, refine?}` -> 202 `{id}` |
 | GET    | `/api/runs`                  | run summaries, newest first                          |
 | GET    | `/api/runs/{id}`             | status plus full result when done                    |
 | GET    | `/api/runs/{id}/events`      | Server-Sent Events: replays history, then streams    |
 | GET    | `/api/runs/{id}/report.md`   | Markdown report                                      |
 | DELETE | `/api/runs/{id}`             |                                                      |
+| GET    | `/api/projects`              | project summaries                                    |
+| POST   | `/api/projects`              | `{name, idea, board?, description?}` -> 201          |
+| GET    | `/api/projects/{name}`       | spec, docs, resolved board, memory, run ids          |
+| PUT    | `/api/projects/{name}/docs/{doc}` | `{text}` for `idea`, `guidelines`, `voice`, `style` |
+| POST   | `/api/projects/{name}/adopt` | `{run_id?}`: refined idea becomes `idea.md`           |
 
 Event types: `run_start`, `phase_start`, `agent_start`, `agent_done`, `phase_done`, `decision`, `run_done`,
 `error`. Events carry `round` for deliberation and a `data` payload: the verdict on `agent_done`, the tally on
@@ -244,6 +293,7 @@ src/idea_refiner/
   boards.py     YAML discovery and validation
   engine.py     hostile -> coaching -> synthesis on CrewAI, parallel jobs, emits events
   verdicts.py   parse agent verdicts, tally the board
+  projects.py   project directories, board mixing, context and memory
   report.py     markdown / json / pdf
   cli.py        typer CLI
   api/          Sanic app, run store, httpx client
@@ -260,14 +310,9 @@ Design notes:
 ## Roadmap
 
 - **Web UI**: board YAML editor and validator, run comparison.
-- **Projects**: one directory/resource per idea holding `idea.md`, project-level `guidelines.md`,
-  `voice.md`, `style.md` injected into every agent, a mix of custom and built-in agents, runs and
-  history. Guidelines are per project, never global.
 - **Support agents**: a scribe (minutes and notes), a cross-checker (contradictions and unsupported
   claims across agents), a deep researcher (grounded briefings via search and MCP knowledge bases) and
   configurable synthesizers, supporting the main board members.
-- **Agent memory**: each agent's thinking stored as inspectable notes so an idea can be refined over
-  several turns.
 - **Structured output**: upload a JSON template and get schema-validated agent output.
 - **Report templates**: render the report into a user-supplied `.docx` (corporate template).
 - **Agent tools**: `crewai_tools` built-ins referenced by name from YAML (scraper, search), then opt-in
@@ -276,7 +321,9 @@ Design notes:
 - **MCP servers**: user-configured MCP servers (internal tools, APIs, knowledge bases) exposed to agents
   as tools.
 - **Voice input**: record in the browser, transcribe, send to the board.
-- **Persona history**: version-controlled changes to roles, backstories and goals per project.
+- **Persona history**: version-controlled changes to roles, backstories and goals per project (each run
+  already snapshots its exact board in `board.json`).
+- **Scribe memory**: an optional LLM scribe that condenses each seat's notes, instead of the verbatim ones.
 
 ## License
 

@@ -13,13 +13,14 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 
-from . import __version__, boards, report
+from . import __version__, boards, projects, report
 from .boards import BoardError
 from .config import PROVIDERS, Settings
 from .config import settings as default_settings
 from .engine import RunError, run_board
 from .llm import LlmSpec, build_llm, describe
 from .models import ALL_PHASES, Event, RefineSpec, RunRequest, RunResult, Tally, Verdict
+from .projects import ProjectError
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -28,8 +29,10 @@ app = typer.Typer(
 )
 boards_app = typer.Typer(no_args_is_help=True, help="List, inspect, validate and scaffold boards.")
 runs_app = typer.Typer(no_args_is_help=True, help="Browse saved runs.")
+projects_app = typer.Typer(no_args_is_help=True, help="Projects: one idea refined over many runs, with memory.")
 app.add_typer(boards_app, name="boards")
 app.add_typer(runs_app, name="runs")
+app.add_typer(projects_app, name="projects")
 con = Console()
 err = Console(stderr=True, style="red")
 
@@ -151,14 +154,20 @@ def run(
     file: Annotated[
         Path | None, typer.Option("--file", "-f", exists=True, dir_okay=False, help="Read the idea from a file")
     ] = None,
-    board: Annotated[str, typer.Option("--board", "-b", help="Board name or path to a board YAML")] = "startup",
+    board: Annotated[
+        str | None, typer.Option("--board", "-b", help="Board name or path to a board YAML (default: startup)")
+    ] = None,
+    project: Annotated[
+        str | None,
+        typer.Option("--project", "-P", help="Run a project: its idea.md, board, guidelines and memory"),
+    ] = None,
     provider: ProviderOpt = None,
     model: ModelOpt = None,
     base_url: BaseUrlOpt = None,
     api_key: ApiKeyOpt = None,
     phases: Annotated[
         list[str] | None,
-        typer.Option("--phase", help="Run only these phases: hostile, coaching, synthesis (repeatable)"),
+        typer.Option("--phase", help="Run only these phases: hostile, deliberation, coaching, synthesis (repeatable)"),
     ] = None,
     server: Annotated[
         str | None, typer.Option("--server", "-s", help="Run on a remote API, e.g. http://localhost:8000")
@@ -179,15 +188,18 @@ def run(
     as_json: Annotated[bool, typer.Option("--json", help="Print the RunResult as JSON instead of a report")] = False,
     quiet: Annotated[bool, typer.Option("--quiet", "-q", help="No live progress, only the final output")] = False,
 ):
-    """Run a board against an idea: hostile critique, coaching advice, synthesis."""
-    text = _read_idea(idea, file).strip()
-    if len(text) < 10:
+    """Run a board against an idea: hostile critique, deliberation, coaching advice, synthesis."""
+    if project and board:
+        _fail("--project uses the project's board; set `board:` in its project.yaml instead of --board")
+    text = "" if project and idea is None and file is None else _read_idea(idea, file).strip()
+    if not project and len(text) < 10:
         _fail("The idea is too short.")
     if bad := [p for p in phases or [] if p not in ALL_PHASES]:
         _fail(f"unknown phase(s) {bad}; choose from {', '.join(ALL_PHASES)}")
     req = RunRequest(
         idea=text,
         board=board,
+        project=project,
         llm=_llm(provider, model, base_url, api_key),
         phases=phases or None,
         title=title,
@@ -207,8 +219,25 @@ def run(
                 result = client.result(run_id)
             except ApiError as e:
                 _fail(str(e))
+        elif project:
+            prep = projects.prepare(project, text, settings)
+            result = run_board(
+                prep.board,
+                prep.idea,
+                request_llm=req.llm,
+                phases=req.phases,
+                title=title,
+                refine=req.refine or prep.refine,
+                context=prep.context,
+                settings=settings,
+                emit=progress,
+            )
+            saved = report.save(result, prep.project.runs_dir)
+            projects.remember(prep.project, prep.board, result)
+            if not (quiet or as_json):
+                con.print(f"[dim]saved to {saved}; memory updated in {prep.project.path / 'memory'}[/]")
         else:
-            spec = boards.load_board(board, settings)
+            spec = boards.load_board(board or settings.default_board, settings)
             result = run_board(
                 spec,
                 text,
@@ -222,13 +251,13 @@ def run(
             saved = report.save(result, settings.runs_dir)
             if not (quiet or as_json):
                 con.print(f"[dim]saved to {saved}[/]")
-    except (BoardError, RunError, ValueError) as e:
+    except (BoardError, ProjectError, RunError, ValueError) as e:
         _fail(str(e))
     except typer.Exit:
         raise
     except Exception as e:  # noqa: BLE001 - LLM/provider errors: show a clean line, not a CrewAI trace
-        target = describe(req.llm or LlmSpec(), settings)
-        hint = f"(while calling {target}; run `refiner check` with the same provider flags)"
+        where = describe(req.llm or LlmSpec(), settings)
+        hint = f"(while calling {where}; run `refiner check` with the same provider flags)"
         _fail(f"{type(e).__name__}: {e}\n{hint}")
     _show(result, as_json, quiet)
 
@@ -375,6 +404,66 @@ def runs_pdf(
     except (FileNotFoundError, RuntimeError) as e:
         _fail(str(e))
     con.print(f"[green]OK[/] {path}")
+
+
+# --- projects -------------------------------------------------------------------------------------
+
+
+@projects_app.command("init")
+def projects_init(
+    name: str,
+    idea: Annotated[str | None, typer.Argument(help="The idea text, or '-' for stdin")] = None,
+    file: Annotated[Path | None, typer.Option("--file", "-f", exists=True, dir_okay=False)] = None,
+    board: Annotated[str, typer.Option("--board", "-b")] = "startup",
+    description: Annotated[str, typer.Option("--description", "-d")] = "",
+):
+    """Create ./projects/<name> with idea.md, guidelines/voice/style.md, agents/, memory/, runs/."""
+    try:
+        p = projects.init_project(name, _read_idea(idea, file), board, description)
+    except (ProjectError, BoardError) as e:
+        _fail(str(e))
+    con.print(f"[green]OK[/] {p.path}. Fill in guidelines.md / voice.md / style.md, then: refiner run -P {name}")
+
+
+@projects_app.command("list")
+def projects_list():
+    """List projects."""
+    t = Table("name", "board", "runs", "idea")
+    for p in projects.list_projects():
+        t.add_row(p.name, p.spec.board, str(len(report.list_runs(p.runs_dir))), p.idea[:70])
+    con.print(t)
+
+
+@projects_app.command("show")
+def projects_show(name: str, memory: Annotated[bool, typer.Option("--memory", "-m", help="Print the notes")] = False):
+    """Show a project: its board seats, context files, memory and runs."""
+    try:
+        p = projects.load_project(name)
+        board = projects.project_board(p)
+    except (ProjectError, BoardError) as e:
+        _fail(str(e))
+    con.print(Panel(Markdown(p.idea or "_no idea.md yet_"), title=f"[bold]{p.name}[/]", subtitle=str(p.path)))
+    con.print(f"board: [bold]{board.name}[/] | seats: {', '.join(a.id for a in board.agents)}")
+    ctx = [f"{f}.md" for f in projects.CONTEXT_FILES if p.text(f)]
+    con.print(f"context: {', '.join(ctx) or '[dim]none (guidelines.md, voice.md, style.md are empty)[/]'}")
+    notes = sorted((p.path / "memory").glob("*.md")) if (p.path / "memory").is_dir() else []
+    con.print(f"memory: {', '.join(f.stem for f in notes) or '[dim]none yet[/]'}")
+    for r in report.list_runs(p.runs_dir)[:10]:
+        v = r.verdict.as_text() if r.verdict else "no verdict"
+        con.print(f"  [dim]{r.created_at:%Y-%m-%d %H:%M}[/] {r.id}  {v}")
+    if memory:
+        for f in notes:
+            con.print(Panel(Markdown(f.read_text(encoding="utf-8")), title=f.stem, border_style="dim"))
+
+
+@projects_app.command("adopt")
+def projects_adopt(name: str, run_id: Annotated[str | None, typer.Argument(help="Default: the latest run")] = None):
+    """Make a run's refined idea the project's idea.md (the old one goes to history/)."""
+    try:
+        archived, _ = projects.adopt(projects.load_project(name), run_id)
+    except ProjectError as e:
+        _fail(str(e))
+    con.print(f"[green]OK[/] idea.md updated; previous version kept as {archived}")
 
 
 if __name__ == "__main__":

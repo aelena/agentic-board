@@ -20,6 +20,7 @@ build/
 
 # runs / reports
 runs/
+projects/
 *.pdf
 
 # node

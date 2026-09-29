@@ -9,6 +9,7 @@
   let health = $state(null)
   let boards = $state([])
   let providers = $state([])
+  let projects = $state([])
   let runs = $state([])
   let error = $state('')
 
@@ -18,19 +19,20 @@
 
   async function refresh() {
     try {
-      ;[health, boards, providers, runs] = await Promise.all([api.health(), api.boards(), api.providers(), api.runs()])
+      ;[health, boards, providers, runs, projects] = await Promise.all([api.health(), api.boards(), api.providers(), api.runs(), api.projects()])
       error = ''
     } catch (e) {
       error = `API unreachable: ${e.message}`
     }
   }
 
-  async function start(body) {
+  async function start(body, failure) {
     error = ''
+    if (!body) { error = failure; return }
     try {
       const { id } = await api.startRun(body)
       follow({ id, status: 'running', events: [], result: null, request: body })
-      runs = await api.runs()
+      ;[runs, projects] = await Promise.all([api.runs(), api.projects()])
     } catch (e) {
       error = e.message
     }
@@ -70,7 +72,7 @@
   <main class="main">
     {#if error}<p class="err">{error}</p>{/if}
     {#if !current}
-      <RunForm {boards} {providers} onstart={start} />
+      <RunForm {boards} {providers} {projects} onstart={start} />
       <BoardPanel {boards} />
     {:else}
       <RunView run={current} onback={() => (current = null)} />

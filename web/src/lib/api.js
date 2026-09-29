@@ -18,6 +18,10 @@ export const api = {
   startRun: (body) => req('/api/runs', { method: 'POST', body: JSON.stringify(body) }),
   deleteRun: (id) => req(`/api/runs/${id}`, { method: 'DELETE' }),
   reportUrl: (id) => `/api/runs/${id}/report.md`,
+  projects: () => req('/api/projects'),
+  project: (name) => req(`/api/projects/${encodeURIComponent(name)}`),
+  createProject: (body) => req('/api/projects', { method: 'POST', body: JSON.stringify(body) }),
+  adopt: (name, run_id) => req(`/api/projects/${encodeURIComponent(name)}/adopt`, { method: 'POST', body: JSON.stringify({ run_id }) }),
 
   /** Subscribe to a run's SSE stream. Returns a stop function. */
   events(id, onEvent, onEnd) {

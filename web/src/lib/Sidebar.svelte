@@ -15,7 +15,7 @@
       <li class:active={r.id === activeId} onclick={() => onopen(r.id)} onkeydown={(e) => e.key === 'Enter' && onopen(r.id)} role="button" tabindex="0">
         <div class="t"><b>{r.title || r.idea}</b></div>
         <div class="muted" style="display:flex;justify-content:space-between;gap:6px">
-          <span>{r.board} | {when(r.created_at)}</span>
+          <span>{r.project ? `${r.project} | ` : ''}{r.board} | {when(r.created_at)}</span>
           <span class="badge {r.status}">{r.status}</span>
         </div>
         {#if r.status !== 'running'}

@@ -98,6 +98,7 @@ class Settings(BaseSettings):
 
     boards_dir: Path | None = None  # extra user boards directory
     runs_dir: Path = Path("runs")
+    projects_dir: Path = Path("projects")
     default_board: str = "startup"
 
     host: str = "127.0.0.1"

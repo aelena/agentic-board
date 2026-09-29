@@ -7,6 +7,9 @@
     GET  /api/runs                   GET /api/runs/<id>            DELETE /api/runs/<id>
     GET  /api/runs/<id>/events       (Server-Sent Events, replays history then streams live)
     GET  /api/runs/<id>/report.md
+    GET  /api/projects               POST /api/projects {name, idea, board?}   GET /api/projects/<name>
+    PUT  /api/projects/<name>/docs/<idea|guidelines|voice|style> {text}
+    POST /api/projects/<name>/adopt {run_id?}
 
 If ``web/dist`` exists (built Svelte app) it is served at ``/``.
 """
@@ -23,12 +26,13 @@ from sanic.exceptions import NotFound
 from sanic.response import HTTPResponse, json, text
 from sanic_ext import Extend
 
-from .. import __version__, boards, report
+from .. import __version__, boards, projects, report
 from ..boards import BoardError
 from ..config import PROVIDERS, Settings
 from ..config import settings as default_settings
 from ..engine import Execute, crew_execute, run_board, warm_up
 from ..models import Event, RunRequest
+from ..projects import ProjectError
 from .store import TERMINAL, RunState, RunStore
 
 WEB_DIST = Path(__file__).resolve().parents[3] / "web" / "dist"
@@ -60,7 +64,7 @@ def create_app(
     app.config.OAS = False
     Extend(app)
     app.ctx.settings = settings
-    app.ctx.store = RunStore(settings.runs_dir)
+    app.ctx.store = RunStore(settings.runs_dir, settings.projects_dir)
     app.ctx.execute = execute
 
     @app.after_server_start
@@ -74,21 +78,30 @@ def create_app(
         st.status = "running"
         emit = lambda e: loop.call_soon_threadsafe(st.push, e)  # noqa: E731 - runs in the worker thread
         try:
-            board = boards.load_board(st.request.board, settings)
+            req, prep = st.request, None
+            if req.project:
+                prep = projects.prepare(req.project, req.idea, settings)
+                board, idea, context, refine = prep.board, prep.idea, prep.context, req.refine or prep.refine
+            else:
+                board = boards.load_board(req.board or settings.default_board, settings)
+                idea, context, refine = req.idea, None, req.refine
             result = await asyncio.to_thread(
                 run_board,
                 board,
-                st.request.idea,
-                request_llm=st.request.llm,
-                phases=st.request.phases,
-                title=st.request.title,
-                refine=st.request.refine,
+                idea,
+                request_llm=req.llm,
+                phases=req.phases,
+                title=req.title,
+                refine=refine,
+                context=context,
                 settings=settings,
                 emit=emit,
                 execute=app.ctx.execute,
                 run_id=st.id,
             )
             store.finish(st, result)
+            if prep:
+                projects.remember(prep.project, board, result)
         except Exception as e:  # noqa: BLE001
             store.fail(st, f"{type(e).__name__}: {e}")
             if not st.events or st.events[-1].type != "error":
@@ -138,10 +151,13 @@ def create_app(
     async def start_run(request: Request):
         try:
             req = RunRequest.model_validate(request.json or {})
-            boards.load_board(req.board, settings)  # fail fast on unknown board
+            if req.project:  # fail fast on an unknown project, board or missing idea
+                projects.prepare(req.project, req.idea, settings)
+            else:
+                boards.load_board(req.board or settings.default_board, settings)
         except ValidationError as e:
-            return json({"error": e.errors(include_url=False)}, status=422)
-        except BoardError as e:
+            return json({"error": e.errors(include_url=False, include_context=False)}, status=422)
+        except (BoardError, ProjectError) as e:
             return json({"error": str(e)}, status=422)
         st = app.ctx.store.create(req)
         # asyncio.create_task rather than app.add_task: the latter only queues until server start
@@ -193,6 +209,84 @@ def create_app(
             await resp.eof()
         finally:
             st.unsubscribe(q)
+
+    # --- projects -------------------------------------------------------------------------------
+
+    def _project(name: str) -> projects.Project:
+        try:
+            return projects.load_project(name, settings)
+        except ProjectError as e:
+            raise NotFound(str(e)) from e
+
+    def _project_summary(p: projects.Project) -> dict:
+        return {
+            "name": p.name,
+            "description": p.spec.description,
+            "board": p.spec.board,
+            "idea": p.idea[:200],
+            "runs": len(report.list_runs(p.runs_dir)),
+        }
+
+    @app.get("/api/projects")
+    async def list_projects(_: Request):
+        return json([_project_summary(p) for p in projects.list_projects(settings)])
+
+    @app.post("/api/projects")
+    async def create_project(request: Request):
+        body = request.json or {}
+        try:
+            p = projects.init_project(
+                str(body.get("name", "")),
+                str(body.get("idea", "")),
+                board=str(body.get("board") or settings.default_board),
+                description=str(body.get("description", "")),
+                settings=settings,
+            )
+        except (ProjectError, BoardError) as e:
+            return json({"error": str(e)}, status=422)
+        return json(_project_summary(p), status=201)
+
+    @app.get("/api/projects/<name>")
+    async def get_project(_: Request, name: str):
+        p = _project(name)
+        try:
+            board = projects.project_board(p, settings).model_dump(mode="json")
+        except (ProjectError, BoardError) as e:
+            board = {"error": str(e)}
+        memory_dir = p.path / "memory"
+        memory = (
+            {f.stem: f.read_text(encoding="utf-8") for f in sorted(memory_dir.glob("*.md"))}
+            if memory_dir.is_dir()
+            else {}
+        )
+        return json(
+            {
+                **_project_summary(p),
+                "spec": p.spec.model_dump(mode="json"),
+                "docs": {d: (p.idea if d == "idea" else p.text(d)) for d in projects.DOCS},
+                "board_spec": board,
+                "memory": memory,
+                "run_ids": [r.id for r in report.list_runs(p.runs_dir)],
+            }
+        )
+
+    @app.put("/api/projects/<name>/docs/<doc>")
+    async def put_project_doc(request: Request, name: str, doc: str):
+        p = _project(name)
+        if doc not in projects.DOCS:
+            return json({"error": f"doc must be one of {', '.join(projects.DOCS)}"}, status=422)
+        text = str((request.json or {}).get("text", "")).strip()
+        (p.path / f"{doc}.md").write_text(text + "\n", encoding="utf-8")
+        return json({"ok": True})
+
+    @app.post("/api/projects/<name>/adopt")
+    async def adopt(request: Request, name: str):
+        p = _project(name)
+        try:
+            archived, idea = projects.adopt(p, (request.json or {}).get("run_id"))
+        except ProjectError as e:
+            return json({"error": str(e)}, status=422)
+        return json({"idea": idea, "archived": archived.name})
 
     if WEB_DIST.is_dir():
         app.static("/", WEB_DIST, index="index.html", name="web")

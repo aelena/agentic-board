@@ -50,7 +50,8 @@ class RunState:
         return {
             "id": self.id,
             "status": self.status,
-            "board": self.request.board,
+            "board": self.result.board if self.result else self.request.board,
+            "project": self.request.project,
             "title": self.request.title,
             "idea": self.request.idea[:200],
             "created_at": self.created_at.isoformat(),
@@ -61,18 +62,31 @@ class RunState:
 
 
 class RunStore:
-    def __init__(self, runs_dir: Path):
-        self.runs_dir = runs_dir
+    """Runs of plain requests live in ``runs_dir``; runs of a project in ``<projects_dir>/<name>/runs``."""
+
+    def __init__(self, runs_dir: Path, projects_dir: Path | None = None):
+        self.runs_dir, self.projects_dir = runs_dir, projects_dir
         self.runs: dict[str, RunState] = {}
-        for r in report.list_runs(runs_dir):  # previously saved runs show up as done
-            st = RunState(
-                id=r.id,
-                request=RunRequest(idea=r.idea, board=r.board, title=r.title),
-                status="done",
-                created_at=r.created_at,
-            )
-            st.result = r
-            self.runs[r.id] = st
+        self.dirs: dict[str, Path] = {}
+        roots = [runs_dir]
+        if projects_dir and projects_dir.is_dir():
+            roots += [p / "runs" for p in sorted(projects_dir.iterdir()) if (p / "runs").is_dir()]
+        for root in roots:
+            for r in report.list_runs(root):  # previously saved runs show up as done
+                st = RunState(
+                    id=r.id,
+                    request=RunRequest(idea=r.idea, board=r.board, project=r.project, title=r.title),
+                    status="done",
+                    created_at=r.created_at,
+                )
+                st.result = r
+                self.runs[r.id] = st
+                self.dirs[r.id] = root / r.id
+
+    def root_for(self, result: RunResult) -> Path:
+        if result.project and self.projects_dir:
+            return self.projects_dir / result.project / "runs"
+        return self.runs_dir
 
     def create(self, req: RunRequest) -> RunState:
         st = RunState(id=uuid4().hex[:12], request=req)
@@ -89,7 +103,7 @@ class RunStore:
         st = self.runs.pop(run_id, None)
         if st is None:
             return False
-        d = self.runs_dir / run_id
+        d = self.dirs.pop(run_id, self.runs_dir / run_id)
         for f in d.glob("*") if d.is_dir() else []:
             f.unlink()
         if d.is_dir():
@@ -98,7 +112,7 @@ class RunStore:
 
     def finish(self, st: RunState, result: RunResult) -> None:
         st.result, st.status = result, "done"
-        report.save(result, self.runs_dir)
+        self.dirs[result.id] = report.save(result, self.root_for(result))
 
     def fail(self, st: RunState, error: str) -> None:
         st.error, st.status = error, "error"

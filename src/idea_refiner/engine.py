@@ -33,6 +33,7 @@ from .models import (
     Mode,
     Phase,
     PhaseResult,
+    ProjectContext,
     RefineSpec,
     RunResult,
     Tally,
@@ -108,6 +109,16 @@ class Ctx:
     run_id: str
     concurrency: int = 1
     iteration: int = 1  # revision of the idea being worked on; stamped on every event and phase
+    context: ProjectContext | None = None  # project guidelines and per-seat memory
+
+    def preamble(self, seat: str) -> str:
+        """Project brief plus the seat's own notes from earlier runs, in front of every task."""
+        if not self.context:
+            return ""
+        t = self.board.prompts
+        out = t.project_context.format(name=self.context.name, brief=self.context.brief) if self.context.brief else ""
+        notes = self.context.memory.get(seat if seat in {a.id for a in self.board.agents} else "board")
+        return out + (t.memory_context.format(notes=notes) if notes else "")
 
     def spec(self, seat_llm: LlmSpec | None) -> LlmSpec:
         return effective_spec(seat_llm, self.request_llm, self.board.llm)
@@ -146,7 +157,7 @@ def run_jobs(ctx: Ctx, phase: Phase, jobs: list[Job], round_: int | None = None)
             allow_delegation=False,
             **extra,
         )
-        description, expected = j.description, j.expected
+        description, expected = ctx.preamble(j.seat) + j.description, j.expected
         if j.verdict:
             description += "\n\n" + t.verdict_format
             expected += " It ends with the fenced JSON verdict block."
@@ -418,6 +429,7 @@ def run_board(
     phases: list[Phase] | None = None,
     title: str | None = None,
     refine: RefineSpec | None = None,
+    context: ProjectContext | None = None,
     settings: Settings = default_settings,
     emit: Emit = _noop,
     execute: Execute = crew_execute,
@@ -440,10 +452,17 @@ def run_board(
     loop = refine.max_iterations > 1 and board.verdicts and {"hostile", "synthesis"} <= set(wanted)
     max_n = refine.max_iterations if loop else 1
     run_spec = effective_spec(request_llm, board.llm)
-    result = RunResult(board=board.name, idea=idea.strip(), title=title, model=describe(run_spec, settings))
+    result = RunResult(
+        board=board.name,
+        project=context.name if context else None,
+        idea=idea.strip(),
+        title=title,
+        model=describe(run_spec, settings),
+    )
     if run_id:
         result.id = run_id
     ctx = Ctx(board, request_llm, settings, emit, execute, result.id, default_concurrency(settings, run_spec))
+    ctx.context = context
     ctx.event("run_start", text=result.model)
     warm_up(settings, run_spec)  # keep import/SSL setup out of the timings
     t0 = time.perf_counter()
