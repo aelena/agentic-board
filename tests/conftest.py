@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import json
+
 import pytest
-from crewai.tasks.task_output import TaskOutput
 
 from idea_refiner.boards import load_board
 from idea_refiner.config import Settings
@@ -17,15 +18,19 @@ def startup():
     return load_board("startup")
 
 
-def fake_execute(agents, tasks):
-    """Stand-in for a CrewAI crew: answers each task from its agent's role and fires task callbacks."""
-    outs = []
-    for agent, task in zip(agents, tasks, strict=True):
-        raw = f"{agent.role} says: {task.description[:40]}"
-        if task.callback:
-            task.callback(TaskOutput(description=task.description, raw=raw, agent=agent.role))
-        outs.append(raw)
-    return outs
+def verdict_block(decision: str = "pivot", score: int = 5, issues: list[str] | None = None) -> str:
+    body = json.dumps({"decision": decision, "score": score, "issues": issues or ["weak moat"]})
+    return f"\n\n```json\n{body}\n```"
+
+
+def wants_verdict(task) -> bool:
+    return '"decision"' in task.description
+
+
+def fake_execute(agent, task) -> str:
+    """Stand-in for a CrewAI crew: answers from the agent's role, with a verdict when the task asks for one."""
+    raw = f"{agent.role} says: {task.description[:40]}"
+    return raw + verdict_block() if wants_verdict(task) else raw
 
 
 @pytest.fixture

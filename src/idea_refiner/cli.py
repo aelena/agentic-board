@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 from pathlib import Path
 from typing import Annotated
 
@@ -18,7 +19,7 @@ from .config import PROVIDERS, Settings
 from .config import settings as default_settings
 from .engine import RunError, run_board
 from .llm import LlmSpec, build_llm, describe
-from .models import ALL_PHASES, Event, RunRequest, RunResult
+from .models import ALL_PHASES, Event, RunRequest, RunResult, Tally, Verdict
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -87,28 +88,49 @@ class Progress:
     def __init__(self, quiet: bool):
         self.quiet = quiet
         self.status = None
+        self.thinking: dict[str, str] = {}  # agent id -> role; agents may run in parallel
+        self.lock = threading.Lock()  # events arrive from worker threads
 
-    def _stop(self):
+    def _spin(self):
+        if not self.thinking:
+            if self.status:
+                self.status.stop()
+                self.status = None
+            return
+        label = f"[cyan]{', '.join(self.thinking.values())}[/] thinking..."
         if self.status:
-            self.status.stop()
-            self.status = None
+            self.status.update(label)
+        else:
+            self.status = con.status(label)
+            self.status.start()
 
     def __call__(self, e: Event) -> None:
         if self.quiet:
             return
+        with self.lock:
+            self._handle(e)
+
+    def _handle(self, e: Event) -> None:
         match e.type:
             case "run_start":
                 con.print(f"[dim]run {e.run_id} | model {e.text}[/]")
             case "phase_start":
                 con.rule(f"[bold]{e.phase}[/]")
             case "agent_start":
-                self.status = con.status(f"[cyan]{e.role}[/] thinking...")
-                self.status.start()
+                self.thinking[e.agent_id or ""] = e.role or ""
+                self._spin()
             case "agent_done":
-                self._stop()
-                con.print(Panel(Markdown(e.text or ""), title=f"[cyan]{e.role}[/]", border_style="dim"))
+                self.thinking.pop(e.agent_id or "", None)
+                self._spin()
+                verdict = (e.data or {}).get("verdict")
+                sub = Verdict.model_validate(verdict).as_text() if verdict else None
+                con.print(Panel(Markdown(e.text or ""), title=f"[cyan]{e.role}[/]", subtitle=sub, border_style="dim"))
+            case "phase_done":
+                if tally := (e.data or {}).get("tally"):
+                    con.print(f"[bold]board verdict:[/] {Tally.model_validate(tally).as_text()}")
             case "error":
-                self._stop()
+                self.thinking.clear()
+                self._spin()
                 err.print(f"error: {e.text}")
 
 

@@ -88,7 +88,7 @@ def test_run_validation_errors(app):
 
 
 def test_run_failure_is_reported(settings):
-    def boom(agents, tasks):
+    def boom(agent, task):
         raise RuntimeError("provider down")
 
     app = create_app(settings, execute=boom, name=f"test_fail_{time.time_ns()}")

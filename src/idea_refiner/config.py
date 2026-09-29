@@ -94,6 +94,7 @@ class Settings(BaseSettings):
     temperature: float = 0.4
     max_tokens: int = 4096
     timeout: int = 300
+    concurrency: int | None = None  # parallel agent calls; None = 1 for local providers, 4 for cloud ones
 
     boards_dir: Path | None = None  # extra user boards directory
     runs_dir: Path = Path("runs")

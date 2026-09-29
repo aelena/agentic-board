@@ -13,6 +13,8 @@ from .llm import LlmSpec
 Mode = Literal["hostile", "coaching"]
 Phase = Literal["hostile", "coaching", "synthesis"]
 ALL_PHASES: tuple[Phase, ...] = ("hostile", "coaching", "synthesis")
+Decision = Literal["kill", "pivot", "proceed"]
+DECISIONS: tuple[Decision, ...] = ("kill", "pivot", "proceed")  # most severe first
 
 
 def _parse_llm(v):
@@ -55,9 +57,17 @@ class SynthesizerSpec(BaseModel):
     parse_llm = field_validator("llm", mode="before")(_parse_llm)
 
 
+VERDICT_FORMAT = """End your reply with your verdict as a fenced JSON block in exactly this shape:
+```json
+{"decision": "kill | pivot | proceed", "score": 0-10, "issues": ["most blocking issue", "..."]}
+```
+kill = fatal, abandon it; pivot = salvageable only with a substantial change; proceed = viable as stated.
+score = how strong the idea is from your seat (0 hopeless, 10 exceptional). At most 3 issues, most severe first."""
+
+
 class Prompts(BaseModel):
     """All prompt templates, overridable per board. Placeholders: {role} {focus} {tone} {idea}
-    {feedback} {hostile_feedback} {coaching_advice} {sentences}."""
+    {feedback} {hostile_feedback} {coaching_advice} {verdict} {sentences}."""
 
     hostile_tone: str = "ruthlessly critical, blunt, and skeptical"
     coaching_tone: str = "constructive, supportive, and solution-oriented"
@@ -77,7 +87,8 @@ class Prompts(BaseModel):
         "## Idea\n{idea}\n\n## Criticisms\n{feedback}"
     )
     synthesis_task: str = (
-        "## Idea\n{idea}\n\n## Brutal critiques\n{hostile_feedback}\n\n## Expert advice\n{coaching_advice}\n\n"
+        "## Idea\n{idea}\n\n## Brutal critiques\n{hostile_feedback}\n\n## Board verdict\n{verdict}\n\n"
+        "## Expert advice\n{coaching_advice}\n\n"
         "Write a {sentences}-sentence investor-ready value proposition that addresses all concerns, "
         "followed by a short bullet list of the concrete changes made to the original idea."
     )
@@ -89,6 +100,7 @@ class Prompts(BaseModel):
     )
     sentences: int = 5
     synthesis_sentences: int = 3
+    verdict_format: str = VERDICT_FORMAT  # appended verbatim (not a template) to tasks that end in a verdict
 
 
 class BoardSpec(BaseModel):
@@ -100,6 +112,7 @@ class BoardSpec(BaseModel):
     synthesizer: SynthesizerSpec = SynthesizerSpec()
     prompts: Prompts = Prompts()
     phases: list[Phase] = list(ALL_PHASES)
+    verdicts: bool = True  # critics end with a structured kill / pivot / proceed verdict
     llm: LlmSpec | None = None  # board-wide default, overrides Settings, overridden by agent.llm
     source: str | None = None  # file path it was loaded from
 
@@ -117,21 +130,61 @@ class BoardSpec(BaseModel):
 # --- results -------------------------------------------------------------------------------------
 
 
+class Verdict(BaseModel):
+    decision: Decision
+    score: int = Field(ge=0, le=10)
+    issues: list[str] = []
+
+    def as_text(self) -> str:
+        issues = f" | issues: {'; '.join(self.issues)}" if self.issues else ""
+        return f"{self.decision} ({self.score}/10){issues}"
+
+
+class Tally(BaseModel):
+    """Where the board stands after a round of verdicts, and who disagrees."""
+
+    votes: dict[Decision, int] = {}
+    mean_score: float | None = None
+    decision: Decision | None = None  # majority; ties go to the more severe decision
+    unanimous: bool = False
+    dissent: list[str] = []  # agent ids voting against the majority
+    missing: list[str] = []  # agent ids whose reply had no parseable verdict
+
+    def as_text(self) -> str:
+        if self.decision is None:
+            return "No verdicts were given."
+        votes = ", ".join(f"{n} {d}" for d, n in self.votes.items())
+        out = f"{votes} (mean score {self.mean_score}/10). Majority: {self.decision}"
+        out += ", unanimous." if self.unanimous else "."
+        if self.dissent:
+            out += f" Dissent: {', '.join(self.dissent)}."
+        if self.missing:
+            out += f" No verdict: {', '.join(self.missing)}."
+        return out
+
+
 class AgentOutput(BaseModel):
     agent_id: str
     role: str
     text: str
+    verdict: Verdict | None = None
     model: str | None = None
     seconds: float | None = None
+
+    def as_markdown(self) -> str:
+        v = f"\n\n**Verdict:** {self.verdict.as_text()}" if self.verdict else ""
+        return f"### {self.role}\n{self.text.strip()}{v}"
 
 
 class PhaseResult(BaseModel):
     phase: Phase
     outputs: list[AgentOutput]
+    tally: Tally | None = None
     seconds: float | None = None
 
     def as_markdown(self) -> str:
-        return "\n\n".join(f"### {o.role}\n{o.text.strip()}" for o in self.outputs)
+        body = "\n\n".join(o.as_markdown() for o in self.outputs)
+        return body + (f"\n\n**Board verdict:** {self.tally.as_text()}" if self.tally else "")
 
 
 class RunRequest(BaseModel):
@@ -153,6 +206,7 @@ class RunResult(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     phases: list[PhaseResult] = []
     pitch: str | None = None
+    verdict: Tally | None = None  # the board's final standing on the idea
     seconds: float | None = None
 
     def phase(self, name: Phase) -> PhaseResult | None:
@@ -160,7 +214,7 @@ class RunResult(BaseModel):
 
 
 class Event(BaseModel):
-    """Progress event emitted during a run (CLI progress bar, SSE stream)."""
+    """Progress event emitted during a run (CLI progress, SSE stream)."""
 
     type: Literal["run_start", "phase_start", "agent_start", "agent_done", "phase_done", "run_done", "error"]
     run_id: str
@@ -168,4 +222,5 @@ class Event(BaseModel):
     agent_id: str | None = None
     role: str | None = None
     text: str | None = None
+    data: dict | None = None  # structured payload: {"verdict"} on agent_done, {"tally"} on phase_done
     at: datetime = Field(default_factory=lambda: datetime.now(UTC))

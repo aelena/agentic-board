@@ -17,8 +17,9 @@ def to_markdown(r: RunResult) -> str:
     head = f"# {r.title or 'Boardroom validation report'}\n\n"
     meta = (
         f"- Board: `{r.board}`\n- Model: `{r.model}`\n- Run: `{r.id}` at {r.created_at:%Y-%m-%d %H:%M} UTC\n"
-        f"- Duration: {r.seconds or 0:.0f}s\n\n"
+        f"- Duration: {r.seconds or 0:.0f}s\n"
     )
+    meta += f"- Board verdict: {r.verdict.as_text()}\n\n" if r.verdict else "\n"
     idea = "## Your idea\n\n> " + r.idea.strip().replace("\n", "\n> ") + "\n\n"
     body = ""
     for p in r.phases:

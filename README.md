@@ -18,6 +18,14 @@ Every board runs three phases:
 2. **Coaching**: the same agents, now constructive, get the idea *and* the critiques and propose fixes.
 3. **Synthesis**: one agent distils everything into a refined pitch.
 
+In the hostile round each critic ends with a structured verdict (`kill | pivot | proceed`, a 0-10 score,
+up to three blocking issues). The board tallies them: majority, mean score, who dissents. Parsing is
+lenient so small local models work too; a seat that returns no valid verdict is listed as missing
+rather than failing the run. Set `verdicts: false` on a board to turn this off.
+
+Agents within a round run in parallel: 4 at a time for cloud providers, 1 for local servers (one model in
+RAM). Override with `REFINER_CONCURRENCY`.
+
 The built-in `startup` board is the original one: Hardened VC, Scaling CTO, Product Manager, General
 Counsel, CISO / Grey-Hat Hacker, and a Founder who synthesises. The `architecture` board reviews a
 technical design (SRE, AppSec, Data, FinOps, Platform, Lead Architect).
@@ -190,7 +198,7 @@ npm run dev                              # dev server on :5173 proxying /api to 
 ## Development
 
 ```bash
-pytest -q            # 19 tests, no network: the engine takes an injectable executor
+pytest -q            # no network: the engine takes an injectable executor
 ruff check . && ruff format .
 ```
 
@@ -202,7 +210,8 @@ src/idea_refiner/
   llm.py        LlmSpec layering -> crewai.LLM
   models.py     BoardSpec / AgentSpec / Prompts (YAML schema), RunResult, Event
   boards.py     YAML discovery and validation
-  engine.py     hostile -> coaching -> synthesis on CrewAI, emits events
+  engine.py     hostile -> coaching -> synthesis on CrewAI, parallel jobs, emits events
+  verdicts.py   parse agent verdicts, tally the board
   report.py     markdown / json / pdf
   cli.py        typer CLI
   api/          Sanic app, run store, httpx client
