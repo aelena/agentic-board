@@ -29,6 +29,21 @@ lenient so small local models work too; a seat that returns no valid verdict is 
 rather than failing the run. Set `verdicts: false` on a board to turn this off. If the opening round is already unanimous there is
 nothing to debate and deliberation is skipped.
 
+**Refine loop** (`--iterate N`, or `refine:` on a board or in the API body): the synthesizer also writes a
+self-contained revised brief, and that brief goes back in front of the board as the next revision. The
+critics see what they said about the previous version and must say whether each issue was actually fixed.
+The loop stops when a revision clears the target (mean score >= `target_score`, at most `max_kills` kill
+votes), when a revision fails to improve on the previous score, or at the iteration limit. A revision the
+loop stops on is judged but not re-synthesized, so the pitch you get is the one the board last scored.
+
+```bash
+refiner run -f idea.md --iterate 3 --target 7
+```
+
+```yaml
+refine: { max_iterations: 3, target_score: 7, max_kills: 0 }   # board default; 1 = single pass
+```
+
 Agents within a round run in parallel: 4 at a time for cloud providers, 1 for local servers (one model in
 RAM). Override with `REFINER_CONCURRENCY`.
 
@@ -173,7 +188,7 @@ refiner serve --workers 4     # Linux/macOS; Windows always runs single-process
 | GET    | `/api/boards`                | all boards                                           |
 | GET    | `/api/boards/{name}`         | one board                                            |
 | POST   | `/api/boards/validate`       | `{yaml}` -> parsed board or 422 with the error       |
-| POST   | `/api/runs`                  | `{idea, board?, llm?, phases?, title?}` -> 202 `{id}` |
+| POST   | `/api/runs`                  | `{idea, board?, llm?, phases?, title?, refine?}` -> 202 `{id}` |
 | GET    | `/api/runs`                  | run summaries, newest first                          |
 | GET    | `/api/runs/{id}`             | status plus full result when done                    |
 | GET    | `/api/runs/{id}/events`      | Server-Sent Events: replays history, then streams    |
@@ -182,8 +197,8 @@ refiner serve --workers 4     # Linux/macOS; Windows always runs single-process
 
 Event types: `run_start`, `phase_start`, `agent_start`, `agent_done`, `phase_done`, `decision`, `run_done`,
 `error`. Events carry `round` for deliberation and a `data` payload: the verdict on `agent_done`, the tally on
-`phase_done`, `{action, by}` on `decision` (the board closing, continuing or skipping a debate). The chair
-shows up as `agent_id: chair`.
+`phase_done`, `{action, by}` on `decision` (closing, continuing or skipping a debate; `iterate` or `stop` for
+the refine loop, with no `phase`). Every event carries `iteration`. The chair shows up as `agent_id: chair`.
 
 ```bash
 curl -s localhost:8000/api/runs -H 'content-type: application/json' \

@@ -13,15 +13,26 @@
     const out = []
     const find = (x) => out.find((s) => s.key === keyOf(x))
     if (run.result) {
-      for (const p of run.result.phases) {
+      const its = run.result.iterations ?? []
+      run.result.phases.forEach((p, i) => {
         out.push({
           key: keyOf(p), phase: p.phase, round: p.round, iteration: p.iteration ?? 1, done: true, tally: p.tally,
           chair: p.chair, closed: p.closed, cards: p.outputs.map((o) => ({ ...o, done: true })),
         })
-      }
+        const n = p.iteration ?? 1
+        const lastOfIteration = run.result.phases[i + 1]?.iteration !== p.iteration
+        if (its.length > 1 && lastOfIteration) {
+          const it = its.find((x) => x.n === n)
+          out.push({ key: `loop:${n}`, loop: true, iteration: n, action: it?.outcome ? 'stop' : 'iterate', text: it?.outcome ?? 'sent back to the board' })
+        }
+      })
       return out
     }
     for (const e of run.events) {
+      if (e.type === 'decision' && !e.phase) {
+        out.push({ key: `loop:${e.iteration}`, loop: true, iteration: e.iteration, action: e.data?.action, text: e.text })
+        continue
+      }
       if (e.type === 'phase_start') out.push({ key: keyOf(e), phase: e.phase, round: e.round, iteration: e.iteration ?? 1, done: false, cards: [] })
       const s = e.phase ? find(e) : null
       if (!s) continue
@@ -72,7 +83,13 @@
 
 {#if errorText}<p class="err">{errorText}</p>{/if}
 
-{#each sections as s (s.key)}
+{#each sections as s, i (s.key)}
+  {#if s.iteration > 1 && sections[i - 1]?.iteration !== s.iteration}
+    <h2 class="revision">Revision {s.iteration}</h2>
+  {/if}
+  {#if s.loop}
+    <p class="loop {s.action}">{s.action === 'iterate' ? 'Back to the board' : 'Loop stopped'}: {s.text}</p>
+  {:else}
   <section class="phase {s.phase}">
     <h2>{title(s)} {#if !s.done}<span class="spinner"></span>{/if}</h2>
     {#if s.tally?.decision}
@@ -98,4 +115,5 @@
     {/if}
     {#if s.closed}<p class="decision">Closed: {s.closed}</p>{:else if s.next}<p class="decision">Another round: {s.next}</p>{/if}
   </section>
+  {/if}
 {/each}

@@ -9,6 +9,8 @@
   let title = $state('')
   let phases = $state({ hostile: true, deliberation: true, coaching: true, synthesis: true })
   let busy = $state(false)
+  let iterations = $state(1)
+  let target = $state(7)
 
   let selected = $derived(providers.find((p) => p.name === provider))
   let ready = $derived(idea.trim().length >= 10 && Object.values(phases).some(Boolean))
@@ -25,6 +27,7 @@
       title: title || null,
       llm: Object.keys(llm).length ? llm : null,
       phases: Object.entries(phases).filter(([, v]) => v).map(([k]) => k),
+      refine: iterations > 1 ? { max_iterations: iterations, target_score: target } : null,
     })
     busy = false
   }
@@ -78,6 +81,19 @@
         {/each}
       </div>
     </div>
+    <div style="flex:0 0 120px">
+      <label for="iter">Refine loop</label>
+      <select id="iter" bind:value={iterations}>
+        <option value={1}>single pass</option>
+        {#each [2, 3, 4, 5] as n}<option value={n}>up to {n} revisions</option>{/each}
+      </select>
+    </div>
+    {#if iterations > 1}
+      <div style="flex:0 0 90px">
+        <label for="target">Target score</label>
+        <input id="target" type="number" min="0" max="10" step="0.5" bind:value={target} />
+      </div>
+    {/if}
     <div style="flex:0 0 auto">
       <button class="primary" disabled={!ready || busy} onclick={submit}>{busy ? 'Starting...' : 'Convene the board'}</button>
     </div>

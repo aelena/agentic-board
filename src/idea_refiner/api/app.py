@@ -82,6 +82,7 @@ def create_app(
                 request_llm=st.request.llm,
                 phases=st.request.phases,
                 title=st.request.title,
+                refine=st.request.refine,
                 settings=settings,
                 emit=emit,
                 execute=app.ctx.execute,

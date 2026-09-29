@@ -19,7 +19,7 @@ from .config import PROVIDERS, Settings
 from .config import settings as default_settings
 from .engine import RunError, run_board
 from .llm import LlmSpec, build_llm, describe
-from .models import ALL_PHASES, Event, RunRequest, RunResult, Tally, Verdict
+from .models import ALL_PHASES, Event, RefineSpec, RunRequest, RunResult, Tally, Verdict
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -64,6 +64,13 @@ def _root(version: Annotated[bool, typer.Option("--version", callback=_version, 
 def _llm(provider, model, base_url, api_key) -> LlmSpec | None:
     spec = LlmSpec(provider=provider, model=model, base_url=base_url, api_key=api_key)
     return spec if spec.model_dump(exclude_none=True) else None
+
+
+def _refine(iterate: int | None, target: float | None) -> RefineSpec | None:
+    if iterate is None and target is None:
+        return None
+    spec = RefineSpec(max_iterations=iterate or 3)  # --target alone implies a loop
+    return spec.model_copy(update={"target_score": target}) if target is not None else spec
 
 
 def _fail(msg: str, code: int = 1):
@@ -115,9 +122,11 @@ class Progress:
             case "run_start":
                 con.print(f"[dim]run {e.run_id} | model {e.text}[/]")
             case "phase_start":
-                con.rule(f"[bold]{e.phase}[/]" + (f" round {e.round}" if e.round else ""))
+                rev = f" [dim](revision {e.iteration})[/]" if (e.iteration or 1) > 1 else ""
+                con.rule(f"[bold]{e.phase}[/]" + (f" round {e.round}" if e.round else "") + rev)
             case "decision":
-                con.print(f"[bold magenta]{(e.data or {}).get('action', '')}[/] [dim]({e.phase})[/] {e.text}")
+                where = f" [dim]({e.phase})[/]" if e.phase else ""
+                con.print(f"[bold magenta]{(e.data or {}).get('action', '')}[/]{where} {e.text}")
             case "agent_start":
                 self.thinking[e.agent_id or ""] = e.role or ""
                 self._spin()
@@ -158,6 +167,15 @@ def run(
         Path | None, typer.Option("--out", "-o", help="Runs directory (default: REFINER_RUNS_DIR or ./runs)")
     ] = None,
     title: Annotated[str | None, typer.Option("--title", "-t")] = None,
+    iterate: Annotated[
+        int | None,
+        typer.Option(
+            "--iterate", "-i", min=1, max=5, help="Refine loop: send the pitch back to the board up to N times"
+        ),
+    ] = None,
+    target: Annotated[
+        float | None, typer.Option("--target", min=0, max=10, help="Board mean score that ends the loop (default 7)")
+    ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Print the RunResult as JSON instead of a report")] = False,
     quiet: Annotated[bool, typer.Option("--quiet", "-q", help="No live progress, only the final output")] = False,
 ):
@@ -168,7 +186,12 @@ def run(
     if bad := [p for p in phases or [] if p not in ALL_PHASES]:
         _fail(f"unknown phase(s) {bad}; choose from {', '.join(ALL_PHASES)}")
     req = RunRequest(
-        idea=text, board=board, llm=_llm(provider, model, base_url, api_key), phases=phases or None, title=title
+        idea=text,
+        board=board,
+        llm=_llm(provider, model, base_url, api_key),
+        phases=phases or None,
+        title=title,
+        refine=_refine(iterate, target),
     )
     progress = Progress(quiet or as_json)
     settings = default_settings if out is None else Settings(runs_dir=out)
@@ -187,7 +210,14 @@ def run(
         else:
             spec = boards.load_board(board, settings)
             result = run_board(
-                spec, text, request_llm=req.llm, phases=req.phases, title=title, settings=settings, emit=progress
+                spec,
+                text,
+                request_llm=req.llm,
+                phases=req.phases,
+                title=title,
+                refine=req.refine,
+                settings=settings,
+                emit=progress,
             )
             saved = report.save(result, settings.runs_dir)
             if not (quiet or as_json):

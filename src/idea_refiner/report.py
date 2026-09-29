@@ -33,7 +33,19 @@ def to_markdown(r: RunResult) -> str:
     )
     meta += f"- Board verdict: {r.verdict.as_text()}\n\n" if r.verdict else "\n"
     idea = "## Your idea\n\n> " + r.idea.strip().replace("\n", "\n> ") + "\n\n"
-    return head + meta + idea + "".join(phase_markdown(p) for p in r.phases)
+    if len(r.iterations) <= 1:
+        return head + meta + idea + "".join(phase_markdown(p) for p in r.phases)
+    log = "## Refine loop\n\n| revision | board verdict | outcome |\n|---|---|---|\n"
+    for it in r.iterations:
+        v = f"{it.verdict.decision} ({it.verdict.mean_score}/10)" if it.verdict else "-"
+        log += f"| {it.n} | {v} | {it.outcome or 'sent back to the board'} |\n"
+    body = ""
+    for it in r.iterations:
+        body += f"# Revision {it.n}\n\n"
+        if it.n > 1:
+            body += "> " + it.idea.strip().replace("\n", "\n> ") + "\n\n"
+        body += "".join(phase_markdown(p) for p in r.phases if p.iteration == it.n)
+    return head + meta + idea + log + "\n" + body
 
 
 def save(r: RunResult, runs_dir: Path) -> Path:

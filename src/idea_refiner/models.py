@@ -84,6 +84,15 @@ class DeliberationSpec(BaseModel):
     stop_on_consensus: bool = True
 
 
+class RefineSpec(BaseModel):
+    """The refine loop: the synthesized pitch goes back in front of the board as the next revision until
+    it clears the bar, stops improving, or ``max_iterations`` revisions have been judged. 1 = single pass."""
+
+    max_iterations: int = Field(1, ge=1, le=5)
+    target_score: float = Field(7.0, ge=0, le=10)  # board mean score that counts as cleared
+    max_kills: int = Field(0, ge=0)  # kill votes tolerated when cleared
+
+
 VERDICT_FORMAT = """End your reply with your verdict as a fenced JSON block in exactly this shape:
 ```json
 {"decision": "kill | pivot | proceed", "score": 0-10, "issues": ["most blocking issue", "..."]}
@@ -143,6 +152,13 @@ class Prompts(BaseModel):
         "continue, put one pointed question to each member who must defend or reconsider a position. "
         "Member ids: {ids}."
     )
+    revision_context: str = (
+        "This is revision {n} of an idea this board has already reviewed. "
+        "What the board said about the previous version:\n{previous}\n\n"
+        "Judge the revision on its own merits. For each earlier issue, check whether it was actually addressed "
+        "or only papered over, and say so. Do not repeat points that were fixed.\n\n"
+        "## Original idea, for reference\n{original}\n\n## Revision {n}, the one you are judging\n"
+    )
     synthesis_task: str = (
         "## Idea\n{idea}\n\n## Brutal critiques\n{hostile_feedback}\n\n## Board deliberation\n{deliberation}\n\n"
         "## Board verdict\n{verdict}\n\n## Expert advice\n{coaching_advice}\n\n"
@@ -157,6 +173,11 @@ class Prompts(BaseModel):
     )
     sentences: int = 5
     synthesis_sentences: int = 3
+    revision_brief: str = (  # appended verbatim to the synthesis task when the refine loop is on
+        "Finally, under the exact heading '## Revised idea', restate the complete revised idea as a self-contained "
+        "brief: what it is, for whom, how it works, the business model, and every piece of evidence and traction "
+        "from the original that still holds. It goes back to the board on its own, so leave nothing implicit."
+    )
     verdict_format: str = VERDICT_FORMAT  # appended verbatim (not a template) to tasks that end in a verdict
     chair_format: str = CHAIR_FORMAT  # appended verbatim to the chair's task
 
@@ -172,6 +193,7 @@ class BoardSpec(BaseModel):
     phases: list[Phase] = list(ALL_PHASES)
     verdicts: bool = True  # critics end with a structured kill / pivot / proceed verdict
     deliberation: DeliberationSpec = DeliberationSpec()
+    refine: RefineSpec = RefineSpec()
     llm: LlmSpec | None = None  # board-wide default, overrides Settings, overridden by agent.llm
     source: str | None = None  # file path it was loaded from
 
@@ -245,6 +267,7 @@ class ChairNote(BaseModel):
 class PhaseResult(BaseModel):
     phase: Phase
     outputs: list[AgentOutput]
+    iteration: int = 1  # which revision of the idea this phase worked on
     round: int | None = None  # deliberation round, 1-based
     tally: Tally | None = None
     chair: ChairNote | None = None
@@ -264,6 +287,17 @@ class RunRequest(BaseModel):
     llm: LlmSpec | None = None
     phases: list[Phase] | None = None
     title: str | None = None
+    refine: RefineSpec | None = None  # overrides the board's
+
+
+class IterationSummary(BaseModel):
+    """One revision of the idea and what the board made of it."""
+
+    n: int
+    idea: str
+    verdict: Tally | None = None  # the board's judgement of ``idea``
+    pitch: str | None = None  # the synthesis produced from it; None when the loop stopped before synthesis
+    outcome: str | None = None  # why the loop stopped after this revision, None if it went on
 
 
 class RunResult(BaseModel):
@@ -274,16 +308,17 @@ class RunResult(BaseModel):
     model: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     phases: list[PhaseResult] = []
-    pitch: str | None = None
-    verdict: Tally | None = None  # the board's final standing on the idea
+    pitch: str | None = None  # the latest refined pitch
+    verdict: Tally | None = None  # the board's final standing
+    iterations: list[IterationSummary] = []
     seconds: float | None = None
 
-    def phase(self, name: Phase) -> PhaseResult | None:
-        return next((p for p in self.phases if p.phase == name), None)
+    def phase(self, name: Phase, iteration: int = 1) -> PhaseResult | None:
+        return next((p for p in self.phases if p.phase == name and p.iteration == iteration), None)
 
-    def all(self, name: Phase) -> list[PhaseResult]:
-        """Every result of a phase, e.g. all deliberation rounds."""
-        return [p for p in self.phases if p.phase == name]
+    def all(self, name: Phase, iteration: int | None = None) -> list[PhaseResult]:
+        """Every result of a phase, e.g. all deliberation rounds (of one iteration, or of the whole run)."""
+        return [p for p in self.phases if p.phase == name and iteration in (None, p.iteration)]
 
 
 EventType = Literal[
@@ -293,10 +328,11 @@ EventType = Literal[
 
 class Event(BaseModel):
     """Progress event emitted during a run (CLI progress, SSE stream). ``decision`` marks a control-flow
-    choice the board made (close or continue a deliberation), with the reason in ``text``."""
+    choice (close / continue / skip a deliberation, iterate / stop the refine loop), reason in ``text``."""
 
     type: EventType
     run_id: str
+    iteration: int | None = None
     phase: Phase | None = None
     round: int | None = None
     agent_id: str | None = None

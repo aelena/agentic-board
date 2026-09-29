@@ -12,6 +12,7 @@ and run in parallel (``Settings.concurrency``). The only side effects are LLM ca
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -28,10 +29,13 @@ from .models import (
     BoardSpec,
     ChairNote,
     Event,
+    IterationSummary,
     Mode,
     Phase,
     PhaseResult,
+    RefineSpec,
     RunResult,
+    Tally,
 )
 from .verdicts import extract_json, parse_verdict, tally
 
@@ -103,12 +107,13 @@ class Ctx:
     execute: Execute
     run_id: str
     concurrency: int = 1
+    iteration: int = 1  # revision of the idea being worked on; stamped on every event and phase
 
     def spec(self, seat_llm: LlmSpec | None) -> LlmSpec:
         return effective_spec(seat_llm, self.request_llm, self.board.llm)
 
     def event(self, type_: str, **kw) -> None:
-        self.emit(Event(type=type_, run_id=self.run_id, **kw))
+        self.emit(Event(type=type_, run_id=self.run_id, iteration=self.iteration, **kw))
 
 
 def default_concurrency(settings: Settings, spec: LlmSpec) -> int:
@@ -189,6 +194,7 @@ def _phase(ctx: Ctx, phase: Phase, jobs: list[Job], verdicts: bool, round_: int 
     result = PhaseResult(
         phase=phase,
         outputs=outputs,
+        iteration=ctx.iteration,
         round=round_,
         tally=tally(outputs) if verdicts else None,
         seconds=round(time.perf_counter() - t0, 2),
@@ -198,10 +204,10 @@ def _phase(ctx: Ctx, phase: Phase, jobs: list[Job], verdicts: bool, round_: int 
     return result
 
 
-def run_phase(ctx: Ctx, mode: Mode, idea: str, feedback: str | None = None) -> PhaseResult:
+def run_phase(ctx: Ctx, mode: Mode, idea: str, feedback: str | None = None, preamble: str = "") -> PhaseResult:
     t = ctx.board.prompts
     template = t.hostile_task if mode == "hostile" else t.coaching_task
-    description = template.format(idea=idea, feedback=feedback or "", sentences=t.sentences)
+    description = preamble + template.format(idea=idea, feedback=feedback or "", sentences=t.sentences)
     verdicts = mode == "hostile" and ctx.board.verdicts
     return _phase(ctx, mode, [seat_job(ctx, a, mode, description, verdicts) for a in ctx.board.agents], verdicts)
 
@@ -317,6 +323,7 @@ def run_synthesis(
     coaching: PhaseResult | None,
     standing: str,
     deliberation: str = "(none)",
+    brief: bool = False,
 ) -> PhaseResult:
     t, s = ctx.board.prompts, ctx.board.synthesizer
     job = Job(
@@ -331,11 +338,76 @@ def run_synthesis(
             deliberation=deliberation,
             verdict=standing,
             sentences=t.synthesis_sentences,
-        ),
+        )
+        + (f"\n\n{t.revision_brief}" if brief else ""),
         expected=t.synthesis_expected,
         llm=s.llm,
     )
     return _phase(ctx, "synthesis", [job], verdicts=False)
+
+
+def _previous_view(prev: IterationSummary, phases: list[PhaseResult]) -> str:
+    """What the board said about the last revision: its standing and every seat's open issues."""
+    last = next((p for p in reversed(phases) if p.iteration == prev.n and p.tally), None)
+    lines = [f"Board verdict: {prev.verdict.as_text()}" if prev.verdict else "Board verdict: none"]
+    for o in last.outputs if last else []:
+        if o.verdict:
+            lines.append(f"- {o.role} ({o.verdict.decision}, {o.verdict.score}/10): {'; '.join(o.verdict.issues)}")
+    return "\n".join(lines)
+
+
+def cleared(refine: RefineSpec, verdict: Tally | None) -> bool:
+    return bool(
+        verdict
+        and verdict.mean_score is not None
+        and verdict.mean_score >= refine.target_score
+        and verdict.votes.get("kill", 0) <= refine.max_kills
+    )
+
+
+def _judge(ctx: Ctx, wanted: list[Phase], idea: str, preamble: str, result: RunResult) -> tuple:
+    """Hostile round plus deliberation on one revision. Returns (hostile, rounds, verdict)."""
+    hostile, rounds, verdict = None, [], None
+    if "hostile" in wanted:
+        hostile = run_phase(ctx, "hostile", idea, preamble=preamble)
+        result.phases.append(hostile)
+        verdict = hostile.tally
+    if "deliberation" in wanted and hostile:
+        rounds = run_deliberation(ctx, idea, hostile)
+        result.phases.extend(rounds)
+        if rounds:
+            verdict = rounds[-1].tally or verdict
+    return hostile, rounds, verdict
+
+
+_REVISED = re.compile(r"^#{1,4}\s*revised idea\s*$", re.I | re.M)
+
+
+def revised_idea(pitch: str) -> str:
+    """The self-contained brief the synthesizer wrote under '## Revised idea', else the whole pitch."""
+    m = _REVISED.search(pitch)
+    brief = pitch[m.end() :].strip() if m else ""
+    return brief if len(brief) >= 40 else pitch
+
+
+def _improve(
+    ctx: Ctx, wanted: list[Phase], idea: str, hostile, rounds, verdict, result: RunResult, brief: bool = False
+) -> str | None:
+    """Coaching plus synthesis on one revision. Returns the new pitch (None without synthesis)."""
+    coaching = None
+    digest = deliberation_digest(rounds)
+    if "coaching" in wanted:
+        feedback = hostile.as_markdown() if hostile else None
+        if feedback and rounds:
+            feedback += f"\n\n## After deliberation\n{digest}"
+        coaching = run_phase(ctx, "coaching", idea, feedback)
+        result.phases.append(coaching)
+    if "synthesis" not in wanted:
+        return None
+    standing = verdict.as_text() if verdict else "(none)"
+    synthesis = run_synthesis(ctx, idea, hostile, coaching, standing, digest, brief)
+    result.phases.append(synthesis)
+    return synthesis.outputs[0].text
 
 
 def run_board(
@@ -345,17 +417,28 @@ def run_board(
     request_llm: LlmSpec | None = None,
     phases: list[Phase] | None = None,
     title: str | None = None,
+    refine: RefineSpec | None = None,
     settings: Settings = default_settings,
     emit: Emit = _noop,
     execute: Execute = crew_execute,
     run_id: str | None = None,
 ) -> RunResult:
-    """Run the requested phases (default: the board's) and return a full RunResult."""
+    """Run the requested phases (default: the board's) and return a full RunResult.
+
+    With ``refine.max_iterations > 1`` this is a loop: each iteration's pitch becomes the next revision
+    and goes back in front of the board, which checks it against its own earlier issues. The loop stops
+    as soon as a revision clears ``target_score``, a revision fails to improve on the previous score, or
+    the iteration limit is reached. A judged revision the loop stops on gets no coaching or synthesis:
+    the pitch that was just judged is the result.
+    """
     wanted = [p for p in ALL_PHASES if p in (board.phases if phases is None else phases)]
     if not wanted:
         raise RunError("no phases selected")
     if "deliberation" in wanted and "hostile" not in wanted:
         raise RunError("deliberation needs the hostile phase: members debate their opening critiques")
+    refine = refine or board.refine
+    loop = refine.max_iterations > 1 and board.verdicts and {"hostile", "synthesis"} <= set(wanted)
+    max_n = refine.max_iterations if loop else 1
     run_spec = effective_spec(request_llm, board.llm)
     result = RunResult(board=board.name, idea=idea.strip(), title=title, model=describe(run_spec, settings))
     if run_id:
@@ -364,30 +447,51 @@ def run_board(
     ctx.event("run_start", text=result.model)
     warm_up(settings, run_spec)  # keep import/SSL setup out of the timings
     t0 = time.perf_counter()
+
+    def stop(it: IterationSummary, why: str) -> None:
+        it.outcome = why
+        ctx.event("decision", text=why, data={"action": "stop", "by": "rule"})
+
     try:
-        hostile = coaching = None
-        rounds: list[PhaseResult] = []
-        if "hostile" in wanted:
-            hostile = run_phase(ctx, "hostile", result.idea)
-            result.phases.append(hostile)
-            result.verdict = hostile.tally
-        if "deliberation" in wanted and hostile:
-            rounds = run_deliberation(ctx, result.idea, hostile)
-            result.phases.extend(rounds)
-            if rounds:
-                result.verdict = rounds[-1].tally or result.verdict
-        digest = deliberation_digest(rounds)
-        if "coaching" in wanted:
-            feedback = hostile.as_markdown() if hostile else None
-            if feedback and rounds:
-                feedback += f"\n\n## After deliberation\n{digest}"
-            coaching = run_phase(ctx, "coaching", result.idea, feedback)
-            result.phases.append(coaching)
-        if "synthesis" in wanted:
-            standing = result.verdict.as_text() if result.verdict else "(none)"
-            synthesis = run_synthesis(ctx, result.idea, hostile, coaching, standing, digest)
-            result.phases.append(synthesis)
-            result.pitch = synthesis.outputs[0].text
+        current, prev = result.idea, None
+        for n in range(1, max_n + 1):
+            ctx.iteration = n
+            it = IterationSummary(n=n, idea=current)
+            result.iterations.append(it)
+            preamble = ""
+            if prev:
+                view = _previous_view(prev, result.phases)
+                preamble = board.prompts.revision_context.format(n=n, previous=view, original=result.idea)
+            hostile, rounds, it.verdict = _judge(ctx, wanted, current, preamble, result)
+            result.verdict = it.verdict or result.verdict
+            if prev:  # judge the revision before spending coaching + synthesis on it
+                before, after = prev.verdict.mean_score, it.verdict.mean_score if it.verdict else None
+                if cleared(refine, it.verdict):
+                    stop(it, f"revision {n} cleared the board ({after}/10, target {refine.target_score})")
+                    break
+                if after is None or after <= before:
+                    stop(it, f"revision {n} did not improve the board's score ({before} -> {after})")
+                    break
+            it.pitch = _improve(ctx, wanted, current, hostile, rounds, it.verdict, result, brief=loop) or None
+            result.pitch = it.pitch or result.pitch
+            if not loop:
+                break
+            if n == 1 and cleared(refine, it.verdict):
+                stop(it, "the idea cleared the board on the first pass")
+                break
+            if it.verdict is None or it.verdict.mean_score is None:
+                stop(it, "no verdicts to judge a revision by")
+                break
+            if n == max_n:
+                stop(it, f"iteration limit reached ({max_n}); the last pitch has not been judged")
+                break
+            ctx.event(
+                "decision",
+                text=f"revision {n} scored {it.verdict.mean_score}/10, below the target {refine.target_score}; "
+                "the refined pitch goes back to the board",
+                data={"action": "iterate", "by": "rule"},
+            )
+            current, prev = revised_idea(it.pitch), it
     except Exception as e:  # noqa: BLE001 - surface every failure as an event, then re-raise
         ctx.event("error", text=f"{type(e).__name__}: {e}")
         raise
