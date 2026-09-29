@@ -11,8 +11,8 @@ from pydantic import BaseModel, Field, field_validator
 from .llm import LlmSpec
 
 Mode = Literal["hostile", "coaching"]
-Phase = Literal["hostile", "coaching", "synthesis"]
-ALL_PHASES: tuple[Phase, ...] = ("hostile", "coaching", "synthesis")
+Phase = Literal["hostile", "deliberation", "coaching", "synthesis"]
+ALL_PHASES: tuple[Phase, ...] = ("hostile", "deliberation", "coaching", "synthesis")
 Decision = Literal["kill", "pivot", "proceed"]
 DECISIONS: tuple[Decision, ...] = ("kill", "pivot", "proceed")  # most severe first
 
@@ -57,17 +57,55 @@ class SynthesizerSpec(BaseModel):
     parse_llm = field_validator("llm", mode="before")(_parse_llm)
 
 
+class ChairSpec(BaseModel):
+    """Runs the deliberation: after each round decides whether another one is worth it, and whom to press."""
+
+    role: str = "Board Chair"
+    goal: str = (
+        "Run a sharp deliberation: surface the real disagreements, press weak arguments, "
+        "and close the debate as soon as another round would add nothing"
+    )
+    backstory: str = (
+        "You have chaired hundreds of investment committees and design reviews. You are neutral, impatient with "
+        "repetition, and you make members defend their positions instead of restating them."
+    )
+    llm: LlmSpec | None = None
+
+    parse_llm = field_validator("llm", mode="before")(_parse_llm)
+
+
+class DeliberationSpec(BaseModel):
+    """After the hostile round, critics read each other and rebut or concede, for up to ``rounds`` rounds.
+    With a chair, the chair decides after each round whether to continue; without one, the debate stops
+    once positions stop moving. A unanimous board always stops early when ``stop_on_consensus``."""
+
+    rounds: int = Field(2, ge=1, le=6)
+    chair: ChairSpec | None = ChairSpec()
+    stop_on_consensus: bool = True
+
+
 VERDICT_FORMAT = """End your reply with your verdict as a fenced JSON block in exactly this shape:
 ```json
 {"decision": "kill | pivot | proceed", "score": 0-10, "issues": ["most blocking issue", "..."]}
 ```
-kill = fatal, abandon it; pivot = salvageable only with a substantial change; proceed = viable as stated.
-score = how strong the idea is from your seat (0 hopeless, 10 exceptional). At most 3 issues, most severe first."""
+Your critique can be as harsh as you like, but your verdict must be calibrated, as if your reputation rode on
+it: kill = the flaws are fatal and no change to the idea would fix them; pivot = viable only after a
+substantial change you can name; proceed = viable as stated, despite the risks you raised.
+score = how strong the idea is from your seat (0 hopeless, 5 average for ideas you see, 10 exceptional).
+At most 3 issues, most severe first."""
+
+CHAIR_FORMAT = """End your reply with your decision as a fenced JSON block in exactly this shape:
+```json
+{"action": "continue | close", "reason": "one sentence", "questions": {"<member id>": "your question"}}
+```
+Leave questions empty when you close."""
 
 
 class Prompts(BaseModel):
     """All prompt templates, overridable per board. Placeholders: {role} {focus} {tone} {idea}
-    {feedback} {hostile_feedback} {coaching_advice} {verdict} {sentences}."""
+    {feedback} {hostile_feedback} {coaching_advice} {deliberation} {verdict} {sentences};
+    deliberation: {round} {own} {others} {standing} {question}; chair: {round} {rounds} {positions}
+    {standing} {movement} {ids}."""
 
     hostile_tone: str = "ruthlessly critical, blunt, and skeptical"
     coaching_tone: str = "constructive, supportive, and solution-oriented"
@@ -78,17 +116,36 @@ class Prompts(BaseModel):
         "due to {focus}. You speak plainly, cut through the hype, and focus on hard truths, even if unpleasant."
     )
     hostile_task: str = (
-        "Critique this idea with extreme skepticism from your area of expertise. "
-        "Identify fatal flaws and explain why they are fatal:\n\n{idea}"
+        "Critique this idea with extreme skepticism from your area of expertise. Find the weaknesses that could "
+        "sink it and explain how each one would. Be explicit about which flaws are fatal and which are serious "
+        "but fixable; calling everything fatal is as lazy as calling everything fine:\n\n{idea}"
     )
     coaching_task: str = (
         "Here is an idea and the criticisms it received. From your area of expertise, give actionable, "
         "constructive advice to turn it into an enterprise-ready product.\n\n"
         "## Idea\n{idea}\n\n## Criticisms\n{feedback}"
     )
+    deliberation_task: str = (
+        "Round {round} of the board's deliberation on this idea.\n\n## Idea\n{idea}\n\n"
+        "## Your position so far\n{own}\n\n## The other members' positions\n{others}\n\n"
+        "## Board verdict so far\n{standing}\n\n{question}"
+        "Engage with the strongest points the other members made. Say explicitly where you concede and where "
+        "you hold, and why. Change your verdict only if you were persuaded, never to be agreeable. "
+        "Do not repeat your earlier critique. Up to {sentences} sentences."
+    )
+    chair_task: str = (
+        "You chair this board. Round {round} of at most {rounds} of deliberation just ended.\n\n"
+        "## Idea\n{idea}\n\n## Positions after this round\n{positions}\n\n## Board verdict\n{standing}\n\n"
+        "## How positions moved this round\n{movement}\n\n"
+        "In 2-3 sentences, say where the board stands and what the real disagreement is. Then decide. Another round "
+        "is worth it only if a specific disagreement could still be resolved or a member dodged a point. Close if "
+        "positions are stable, the disagreement is irreducible, or another round would repeat itself. If you "
+        "continue, put one pointed question to each member who must defend or reconsider a position. "
+        "Member ids: {ids}."
+    )
     synthesis_task: str = (
-        "## Idea\n{idea}\n\n## Brutal critiques\n{hostile_feedback}\n\n## Board verdict\n{verdict}\n\n"
-        "## Expert advice\n{coaching_advice}\n\n"
+        "## Idea\n{idea}\n\n## Brutal critiques\n{hostile_feedback}\n\n## Board deliberation\n{deliberation}\n\n"
+        "## Board verdict\n{verdict}\n\n## Expert advice\n{coaching_advice}\n\n"
         "Write a {sentences}-sentence investor-ready value proposition that addresses all concerns, "
         "followed by a short bullet list of the concrete changes made to the original idea."
     )
@@ -101,6 +158,7 @@ class Prompts(BaseModel):
     sentences: int = 5
     synthesis_sentences: int = 3
     verdict_format: str = VERDICT_FORMAT  # appended verbatim (not a template) to tasks that end in a verdict
+    chair_format: str = CHAIR_FORMAT  # appended verbatim to the chair's task
 
 
 class BoardSpec(BaseModel):
@@ -113,6 +171,7 @@ class BoardSpec(BaseModel):
     prompts: Prompts = Prompts()
     phases: list[Phase] = list(ALL_PHASES)
     verdicts: bool = True  # critics end with a structured kill / pivot / proceed verdict
+    deliberation: DeliberationSpec = DeliberationSpec()
     llm: LlmSpec | None = None  # board-wide default, overrides Settings, overridden by agent.llm
     source: str | None = None  # file path it was loaded from
 
@@ -176,10 +235,20 @@ class AgentOutput(BaseModel):
         return f"### {self.role}\n{self.text.strip()}{v}"
 
 
+class ChairNote(BaseModel):
+    action: Literal["continue", "close"]
+    reason: str = ""
+    summary: str = ""  # the chair's prose: where the board stands
+    questions: dict[str, str] = {}  # agent id -> question for the next round
+
+
 class PhaseResult(BaseModel):
     phase: Phase
     outputs: list[AgentOutput]
+    round: int | None = None  # deliberation round, 1-based
     tally: Tally | None = None
+    chair: ChairNote | None = None
+    closed: str | None = None  # set on the last deliberation round: why the debate ended
     seconds: float | None = None
 
     def as_markdown(self) -> str:
@@ -212,13 +281,24 @@ class RunResult(BaseModel):
     def phase(self, name: Phase) -> PhaseResult | None:
         return next((p for p in self.phases if p.phase == name), None)
 
+    def all(self, name: Phase) -> list[PhaseResult]:
+        """Every result of a phase, e.g. all deliberation rounds."""
+        return [p for p in self.phases if p.phase == name]
+
+
+EventType = Literal[
+    "run_start", "phase_start", "agent_start", "agent_done", "phase_done", "decision", "run_done", "error"
+]
+
 
 class Event(BaseModel):
-    """Progress event emitted during a run (CLI progress, SSE stream)."""
+    """Progress event emitted during a run (CLI progress, SSE stream). ``decision`` marks a control-flow
+    choice the board made (close or continue a deliberation), with the reason in ``text``."""
 
-    type: Literal["run_start", "phase_start", "agent_start", "agent_done", "phase_done", "run_done", "error"]
+    type: EventType
     run_id: str
     phase: Phase | None = None
+    round: int | None = None
     agent_id: str | None = None
     role: str | None = None
     text: str | None = None

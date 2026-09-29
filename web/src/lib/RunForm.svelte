@@ -7,7 +7,7 @@
   let model = $state('')
   let baseUrl = $state('')
   let title = $state('')
-  let phases = $state({ hostile: true, coaching: true, synthesis: true })
+  let phases = $state({ hostile: true, deliberation: true, coaching: true, synthesis: true })
   let busy = $state(false)
 
   let selected = $derived(providers.find((p) => p.name === provider))
@@ -32,7 +32,7 @@
 
 <section class="panel">
   <p class="brand">Put your idea in front of the board</p>
-  <p class="muted">Hostile round, coaching round, refined pitch. Nothing leaves your machine when you use a local model.</p>
+  <p class="muted">Hostile round, chaired debate, coaching round, refined pitch. Nothing leaves your machine when you use a local model.</p>
 
   <label for="idea">Idea</label>
   <textarea id="idea" bind:value={idea} placeholder="A two-pass legal document comparison system that runs locally..."></textarea>

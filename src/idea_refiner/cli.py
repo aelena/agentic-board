@@ -115,7 +115,9 @@ class Progress:
             case "run_start":
                 con.print(f"[dim]run {e.run_id} | model {e.text}[/]")
             case "phase_start":
-                con.rule(f"[bold]{e.phase}[/]")
+                con.rule(f"[bold]{e.phase}[/]" + (f" round {e.round}" if e.round else ""))
+            case "decision":
+                con.print(f"[bold magenta]{(e.data or {}).get('action', '')}[/] [dim]({e.phase})[/] {e.text}")
             case "agent_start":
                 self.thinking[e.agent_id or ""] = e.role or ""
                 self._spin()

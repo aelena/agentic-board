@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .config import PROVIDERS, Settings
 
@@ -22,7 +22,7 @@ class LlmSpec(BaseModel):
     provider: str | None = None
     model: str | None = None
     base_url: str | None = None
-    api_key: str | None = None
+    api_key: str | None = Field(None, repr=False)
     temperature: float | None = None
     max_tokens: int | None = None
 

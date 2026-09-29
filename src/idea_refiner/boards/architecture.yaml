@@ -27,6 +27,13 @@ agents:
     focus: systems that were impossible to deploy, debug or hand over
     coach: { role: Platform Lead (Coach), focus: paved roads and boring operations }
 
+deliberation:
+  rounds: 2
+  chair:
+    role: Architecture Review Chair
+    goal: Drive the review to a decision; press reviewers whose findings are vague or contradicted
+    backstory: You have chaired design reviews at scale and only care about findings that change the design.
+
 synthesizer:
   role: Lead Architect
   goal: Rewrite the proposal so it survives the review
@@ -39,6 +46,12 @@ prompts:
 
     ## Review findings
     {hostile_feedback}
+
+    ## Review board debate
+    {deliberation}
+
+    ## Board verdict
+    {verdict}
 
     ## Recommendations
     {coaching_advice}

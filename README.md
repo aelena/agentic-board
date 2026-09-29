@@ -12,16 +12,22 @@ sharing one engine.
 
 ## How it works
 
-Every board runs three phases:
+Every board runs up to four phases:
 
-1. **Hostile**: each agent tears the idea apart from its own domain.
-2. **Coaching**: the same agents, now constructive, get the idea *and* the critiques and propose fixes.
-3. **Synthesis**: one agent distils everything into a refined pitch.
+1. **Hostile**: each agent tears the idea apart from its own domain and ends with a verdict.
+2. **Deliberation**: the critics read each other and rebut or concede, round after round. After each
+   round a **chair** agent decides whether another round is worth it and puts pointed questions to the
+   members who dodged a point. The debate ends when the board is unanimous, the chair closes it, or the
+   round limit is hit, so how long it runs depends on how the debate goes.
+3. **Coaching**: the same agents, now constructive, get the idea, the critiques and where the debate
+   landed, and propose fixes.
+4. **Synthesis**: one agent distils everything into a refined pitch.
 
 In the hostile round each critic ends with a structured verdict (`kill | pivot | proceed`, a 0-10 score,
 up to three blocking issues). The board tallies them: majority, mean score, who dissents. Parsing is
 lenient so small local models work too; a seat that returns no valid verdict is listed as missing
-rather than failing the run. Set `verdicts: false` on a board to turn this off.
+rather than failing the run. Set `verdicts: false` on a board to turn this off. If the opening round is already unanimous there is
+nothing to debate and deliberation is skipped.
 
 Agents within a round run in parallel: 4 at a time for cloud providers, 1 for local servers (one model in
 RAM). Override with `REFINER_CONCURRENCY`.
@@ -128,7 +134,12 @@ synthesizer:
   goal: Rewrite the contract summary so it survives review
   backstory: You have negotiated hundreds of these.
 
-phases: [hostile, coaching, synthesis]   # drop any you do not want
+deliberation:                             # optional; this is the default
+  rounds: 2                               # upper bound, 1-6
+  stop_on_consensus: true
+  chair: { role: Board Chair }            # `chair: null` = no chair, stop when nobody changes verdict
+
+phases: [hostile, deliberation, coaching, synthesis]   # drop any you do not want
 ```
 
 An agent needs only `id`, `role` and `focus` (what this expert has watched projects die from). Everything
@@ -136,9 +147,12 @@ else is generated from templates. Overrides available per agent: `hostile: {role
 backstory}`, `coach: {...}`, `llm`, `max_iter`. A board-wide `llm:` applies to all agents.
 
 Prompt templates live under `prompts:` and can be overridden per board (`goal`, `backstory`,
-`hostile_task`, `coaching_task`, `synthesis_task`, `expected_output`, `synthesis_expected`,
-`hostile_tone`, `coaching_tone`, `sentences`, `synthesis_sentences`). Placeholders: `{role}`, `{focus}`,
-`{tone}`, `{idea}`, `{feedback}`, `{hostile_feedback}`, `{coaching_advice}`, `{sentences}`. See
+`hostile_task`, `deliberation_task`, `chair_task`, `coaching_task`, `synthesis_task`, `expected_output`,
+`synthesis_expected`, `hostile_tone`, `coaching_tone`, `sentences`, `synthesis_sentences`, `verdict_format`,
+`chair_format`). Placeholders: `{role}`, `{focus}`, `{tone}`, `{idea}`, `{feedback}`, `{hostile_feedback}`,
+`{deliberation}`, `{verdict}`, `{coaching_advice}`, `{sentences}`; deliberation adds `{round}`, `{own}`,
+`{others}`, `{standing}`, `{question}`; the chair gets `{round}`, `{rounds}`, `{positions}`, `{standing}`,
+`{movement}`, `{ids}`. See
 `src/idea_refiner/boards/architecture.yaml` for an example.
 
 LLM resolution order, most specific wins: agent `llm` > request (`--provider`/`--model`, or the API
@@ -166,7 +180,10 @@ refiner serve --workers 4     # Linux/macOS; Windows always runs single-process
 | GET    | `/api/runs/{id}/report.md`   | Markdown report                                      |
 | DELETE | `/api/runs/{id}`             |                                                      |
 
-Event types: `run_start`, `phase_start`, `agent_start`, `agent_done`, `phase_done`, `run_done`, `error`.
+Event types: `run_start`, `phase_start`, `agent_start`, `agent_done`, `phase_done`, `decision`, `run_done`,
+`error`. Events carry `round` for deliberation and a `data` payload: the verdict on `agent_done`, the tally on
+`phase_done`, `{action, by}` on `decision` (the board closing, continuing or skipping a debate). The chair
+shows up as `agent_id: chair`.
 
 ```bash
 curl -s localhost:8000/api/runs -H 'content-type: application/json' \
@@ -231,8 +248,6 @@ Design notes:
 - **Projects**: one directory/resource per idea holding `idea.md`, project-level `guidelines.md`,
   `voice.md`, `style.md` injected into every agent, a mix of custom and built-in agents, runs and
   history. Guidelines are per project, never global.
-- **Board deliberation**: agents read and rebut each other over configurable rounds, optionally chaired,
-  ending in scored verdicts so consensus and dissent are explicit, instead of five monologues and a summary.
 - **Support agents**: a scribe (minutes and notes), a cross-checker (contradictions and unsupported
   claims across agents), a deep researcher (grounded briefings via search and MCP knowledge bases) and
   configurable synthesizers, supporting the main board members.

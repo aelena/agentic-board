@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from conftest import verdict_block, wants_verdict
+from conftest import chair_block, is_chair, verdict_block, wants_verdict
 
 from idea_refiner import report
 from idea_refiner.engine import RunError, run_board
@@ -29,8 +29,11 @@ def test_full_run_collects_every_agent(startup, settings, execute):
     assert r.model == "ollama/fake-model @ http://localhost:11434"
     types = [e.type for e in events]
     assert types[0] == "run_start" and types[-1] == "run_done"
+    # the fake board is unanimous (pivot) from the opening round, so there is nothing to deliberate
     assert types.count("agent_start") == 11 and types.count("agent_done") == 11
     assert types.count("phase_start") == 3 == types.count("phase_done")
+    skip = next(e for e in events if e.type == "decision")
+    assert skip.data == {"action": "skip", "by": "rule"} and "unanimous" in skip.text
 
 
 def test_coaching_receives_hostile_feedback_and_synthesis_receives_both(startup, settings):
@@ -40,7 +43,7 @@ def test_coaching_receives_hostile_feedback_and_synthesis_receives_both(startup,
         seen.append(task.description)
         return f"{agent.role}-out"
 
-    run_board(startup, IDEA, settings=settings, execute=spy)
+    run_board(startup, IDEA, settings=settings, execute=spy, phases=["hostile", "coaching", "synthesis"])
     hostile, coaching, synth = seen[0], seen[5], seen[10]
     assert IDEA in hostile and "Criticisms" not in hostile
     assert "### Hardened Venture Capitalist\nHardened Venture Capitalist-out" in coaching
@@ -130,3 +133,72 @@ def test_report_roundtrip(startup, settings, execute):
     md = report.to_markdown(report.load(settings.runs_dir, r.id))
     assert md.startswith("# Legal diff") and "### Scaling CTO" in md and "## Refined pitch" in md
     assert [x.id for x in report.list_runs(settings.runs_dir)] == [r.id]
+
+
+def _debate(decisions_by_round, chair_replies=None):
+    """Executor where each seat's decision depends on the deliberation round (0 = hostile)."""
+    chair_replies = list(chair_replies or [])
+    seen = {"chair": [], "tasks": []}
+
+    def exe(agent, task):
+        seen["tasks"].append((agent.role, task.description))
+        if is_chair(task):
+            seen["chair"].append(task.description)
+            return "The board is split." + (chair_replies.pop(0) if chair_replies else chair_block())
+        if not wants_verdict(task):
+            return f"{agent.role} advice"
+        n = task.description.count("Round ") and int(task.description.split("Round ")[1].split(" ")[0])
+        d = decisions_by_round[min(n, len(decisions_by_round) - 1)].get(agent.role, "pivot")
+        return f"{agent.role} r{n}" + verdict_block(d, 3 if d == "kill" else 6)
+
+    return exe, seen
+
+
+def test_chair_presses_a_member_then_round_limit_closes(startup, settings):
+    rounds = [{"Hardened Venture Capitalist": "kill"}, {"Hardened Venture Capitalist": "kill"}, {}]
+    exe, seen = _debate(
+        rounds, [chair_block("continue", "vc has not answered the moat point", {"vc": "Name the moat.", "ghost": "x"})]
+    )
+    events = []
+    r = run_board(startup, IDEA, settings=settings, execute=exe, emit=events.append)
+    delib = r.all("deliberation")
+    assert [d.round for d in delib] == [1, 2]
+    assert delib[0].chair.action == "continue" and delib[0].chair.questions == {"vc": "Name the moat."}
+    assert delib[0].chair.summary == "The board is split."
+    assert delib[1].closed == "the board is unanimous" and delib[1].chair is None
+    assert len(seen["chair"]) == 1 and "vc: kill -> kill" not in seen["chair"][0]
+    vc_round2 = next(d for role, d in seen["tasks"] if role == "Hardened Venture Capitalist" and "Round 2 " in d)
+    assert "## The chair asks you\nName the moat." in vc_round2
+    assert r.verdict == delib[1].tally and r.verdict.unanimous
+    decisions = [(e.round, e.data["action"], e.data["by"]) for e in events if e.type == "decision"]
+    assert decisions == [(1, "continue", "chair"), (2, "close", "rule")]
+    coaching_task = next(d for role, d in seen["tasks"] if role == "Venture Capitalist (Coach)")
+    assert "## After deliberation" in coaching_task and "Final positions after 2 round(s)" in coaching_task
+    md = report.to_markdown(r)
+    assert "## Deliberation, round 2" in md and "*to vc:* Name the moat." in md
+
+
+def test_chair_can_close_early_and_bad_chair_reply_closes(startup, settings):
+    split = [{"Hardened Venture Capitalist": "kill"}]
+    exe, seen = _debate(split, [chair_block("close", "irreducible disagreement")])
+    r = run_board(startup, IDEA, settings=settings, execute=exe, phases=["hostile", "deliberation"])
+    assert len(r.all("deliberation")) == 1 and r.phase("deliberation").closed == "irreducible disagreement"
+
+    exe, _ = _debate(split, ["no json at all"])
+    r = run_board(startup, IDEA, settings=settings, execute=exe, phases=["hostile", "deliberation"])
+    assert r.phase("deliberation").closed == "the chair gave no usable decision"
+
+
+def test_without_chair_debate_stops_when_positions_stop_moving(startup, settings):
+    startup.deliberation.chair = None
+    startup.deliberation.rounds = 4
+    split = {"Hardened Venture Capitalist": "kill"}
+    exe, seen = _debate([split, {"Hardened Venture Capitalist": "proceed"}, {"Hardened Venture Capitalist": "proceed"}])
+    r = run_board(startup, IDEA, settings=settings, execute=exe, phases=["hostile", "deliberation"])
+    delib = r.all("deliberation")
+    assert len(delib) == 2 and delib[1].closed == "positions are stable" and not seen["chair"]
+
+
+def test_deliberation_needs_hostile(startup, settings, execute):
+    with pytest.raises(RunError, match="needs the hostile phase"):
+        run_board(startup, IDEA, settings=settings, execute=execute, phases=["deliberation", "synthesis"])

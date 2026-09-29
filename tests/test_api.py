@@ -68,7 +68,7 @@ def test_run_lifecycle_and_sse(client, settings):
     assert r.status == 200 and r.content_type.startswith("text/event-stream")
     events = [json.loads(line[5:]) for line in r.text.splitlines() if line.startswith("data:")]
     assert events[0]["type"] == "run_start" and events[-1]["type"] == "run_done"
-    assert sum(e["type"] == "agent_done" for e in events) == 11
+    assert sum(e["type"] == "agent_done" for e in events) == 11  # unanimous fake board: no deliberation
 
     _, r = client.get(f"/api/runs/{run_id}/report.md")
     assert r.status == 200 and "## Refined pitch" in r.text

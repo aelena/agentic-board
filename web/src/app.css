@@ -9,6 +9,7 @@
   --hostile: #b91c1c;
   --coaching: #0e7490;
   --synthesis: #15803d;
+  --deliberation: #7c3aed;
   --danger: #b91c1c;
   --radius: 10px;
   --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -27,6 +28,7 @@
     --hostile: #f87171;
     --coaching: #22d3ee;
     --synthesis: #4ade80;
+    --deliberation: #a78bfa;
     --danger: #f87171;
   }
 }
@@ -62,6 +64,9 @@ pre { white-space: pre-wrap; }
 .phase.hostile h2 { color: var(--hostile); }
 .phase.coaching h2 { color: var(--coaching); }
 .phase.synthesis h2 { color: var(--synthesis); }
+.phase.deliberation h2 { color: var(--deliberation); }
+.card.chair { border-left: 3px solid var(--deliberation); }
+.decision { font-size: 13px; color: var(--deliberation); font-weight: 600; margin: 0 0 8px; }
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 10px; }
 .card h3 { margin: 0 0 6px; font-size: 14px; }
 .card .md :first-child { margin-top: 0; }

@@ -11,7 +11,7 @@ import os
 import warnings
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # CrewAI phones home unless told otherwise. Off by default; users can re-enable explicitly.
@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     provider: str | None = None  # None = auto-detect from available keys, else ollama
     model: str | None = None
     base_url: str | None = None
-    api_key: str | None = None
+    api_key: str | None = Field(None, repr=False)
     temperature: float = 0.4
     max_tokens: int = 4096
     timeout: int = 300

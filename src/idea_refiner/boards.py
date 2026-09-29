@@ -99,7 +99,8 @@ synthesizer:
   goal: Turn the critique and advice into a refined, defensible proposal
   backstory: You turn harsh feedback into a sharper plan.
 
-# phases: [hostile, coaching, synthesis]   # drop phases you do not want
+# phases: [hostile, deliberation, coaching, synthesis]   # drop phases you do not want
+# deliberation: {{rounds: 2}}               # critics debate; add `chair: null` to run without a chair
 # prompts:                                  # override any template, see README
 #   sentences: 5
 """

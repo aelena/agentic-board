@@ -1,9 +1,9 @@
 # The original "AI Investor Board" from the notebook: five hostile investors/executives,
-# the same five as coaches, and a founder who synthesizes everything into a pitch.
+# a chaired deliberation, the same five as coaches, and a founder who synthesizes everything into a pitch.
 name: startup
 description: >
   Stress-test an AI startup idea in front of a VC, a scaling CTO, a product manager,
-  a general counsel and a CISO. Hostile round, coaching round, founder synthesis.
+  a general counsel and a CISO. Hostile round, chaired deliberation, coaching round, founder synthesis.
 
 agents:
   - id: vc
@@ -40,6 +40,15 @@ agents:
     coach:
       role: CISO (Coach)
       focus: zero-trust security
+
+# After the hostile round the critics debate each other; the chair decides after each round
+# whether another one is worth it. Set `chair: null` to stop as soon as positions stop moving.
+deliberation:
+  rounds: 2
+  chair:
+    role: Investment Committee Chair
+    goal: Get the committee to a clear decision; press members whose arguments are weak or contradicted
+    backstory: You have chaired hundreds of investment committees and have no patience for repeated arguments.
 
 synthesizer:
   role: Startup Founder

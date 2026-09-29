@@ -4,13 +4,25 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .models import RunResult
+from .models import PhaseResult, RunResult
 
 PHASE_TITLES = {
     "hostile": "Hostile feedback (brutal truth)",
+    "deliberation": "Deliberation",
     "coaching": "Coaching advice (actionable fixes)",
     "synthesis": "Refined pitch",
 }
+
+
+def phase_markdown(p: PhaseResult) -> str:
+    title = PHASE_TITLES[p.phase] + (f", round {p.round}" if p.round else "")
+    body = p.outputs[0].text.strip() if p.phase == "synthesis" else p.as_markdown()
+    if p.chair and p.chair.summary:
+        body += f"\n\n**Chair:** {p.chair.summary}"
+        body += "".join(f"\n- *to {k}:* {q}" for k, q in p.chair.questions.items())
+    if p.closed:
+        body += f"\n\n*Deliberation closed: {p.closed}.*"
+    return f"## {title}\n\n{body}\n\n"
 
 
 def to_markdown(r: RunResult) -> str:
@@ -21,11 +33,7 @@ def to_markdown(r: RunResult) -> str:
     )
     meta += f"- Board verdict: {r.verdict.as_text()}\n\n" if r.verdict else "\n"
     idea = "## Your idea\n\n> " + r.idea.strip().replace("\n", "\n> ") + "\n\n"
-    body = ""
-    for p in r.phases:
-        body += f"## {PHASE_TITLES[p.phase]}\n\n"
-        body += (p.outputs[0].text.strip() if p.phase == "synthesis" else p.as_markdown()) + "\n\n"
-    return head + meta + idea + body
+    return head + meta + idea + "".join(phase_markdown(p) for p in r.phases)
 
 
 def save(r: RunResult, runs_dir: Path) -> Path:
