@@ -224,6 +224,48 @@ research:                        # optional; these are the defaults
   # llm: openai/gpt-4o           # research can use its own model
 ```
 
+### MCP servers
+
+Give seats (and researchers) the tools of any MCP server: an internal knowledge base, a CRM, a docs
+search. Declare servers once per board or project, then reference them per seat, optionally limited to
+specific tools:
+
+```yaml
+mcp_servers:
+  kb:                                   # a local server the refiner starts
+    command: npx
+    args: ["-y", "@acme/kb-mcp"]
+    env: { KB_TOKEN: "${KB_TOKEN}" }    # ${VAR} comes from the environment / .env, never from YAML
+  crm:                                  # a remote server
+    url: https://crm.internal.example/mcp
+    headers: { Authorization: "Bearer ${CRM_TOKEN}" }
+    # transport: sse                    # default is streamable HTTP
+
+agents:
+  - id: vc
+    role: Hardened Venture Capitalist
+    focus: lack of defensibility and market fit
+    mcp: [{ server: crm, allow: [search_accounts] }]   # only this tool
+research:
+  mcp: [kb]                             # researchers can use it too
+```
+
+```bash
+refiner mcp my-board                    # connect and list each server's tools, and which seats use them
+refiner mcp -P my-project
+```
+
+MCP tools go through the same wrapper as the built-in tools: they count against the seat's tool budget,
+are switched off after two failures, have their output capped, and every call is logged. The model sees
+them as `<server>_<tool>` (e.g. `crm_search_accounts`). A server that cannot be reached costs that seat
+the tool (reported as a failed `tool` event), not the run. Missing commands and unset `${VAR}`s fail
+the run before the first LLM call.
+
+**Security.** A server with `command` starts a local process with the server's privileges. Such servers
+are accepted only from boards and projects read from disk (your files). A board that arrives as inline
+YAML, e.g. through a future API board editor, may only use `url` servers, unless you set
+`REFINER_ALLOW_MCP_COMMANDS=true`. Keep that off whenever the API is reachable by anyone but you.
+
 ## Projects: refine one idea over many sessions
 
 A project is a directory holding one idea and everything the board should know about it:
@@ -262,6 +304,7 @@ agents:
   - {id: devrel, role: Developer Relations Lead, focus: developer tools nobody adopted}
 refine: {max_iterations: 3, target_score: 7}
 memory: true          # false = no notes written or read
+mcp_servers: {}       # added to the board's servers (same format as in boards)
 ```
 
 Memory is plain Markdown written after each run from the verdicts and advice, with no extra LLM call.
@@ -370,8 +413,6 @@ Design notes:
 - **Report templates**: render the report into a user-supplied `.docx` (corporate template).
 - **Tool scripts**: opt-in user Python tools loaded from a local plugin directory, disabled by default and
   never via upload without explicit configuration.
-- **MCP servers**: user-configured MCP servers (internal tools, APIs, knowledge bases) exposed to agents
-  as tools.
 - **Voice input**: record in the browser, transcribe, send to the board.
 - **Persona history**: version-controlled changes to roles, backstories and goals per project (each run
   already snapshots its exact board in `board.json`).

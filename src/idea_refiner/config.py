@@ -106,6 +106,9 @@ class Settings(BaseSettings):
     boards_dir: Path | None = None  # extra user boards directory
     runs_dir: Path = Path("runs")
     projects_dir: Path = Path("projects")
+    # MCP servers with a `command` start a local process. They are always allowed in boards and projects read
+    # from disk; boards that arrive as inline YAML (API) may only use `url` servers unless this is true.
+    allow_mcp_commands: bool = False
     default_board: str = "startup"
 
     host: str = "127.0.0.1"

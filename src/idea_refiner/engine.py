@@ -13,6 +13,7 @@ and run in parallel (``Settings.concurrency``). The only side effects are LLM ca
 from __future__ import annotations
 
 import re
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -31,6 +32,7 @@ from .models import (
     ChairNote,
     Event,
     IterationSummary,
+    McpRef,
     Mode,
     Phase,
     PhaseResult,
@@ -99,6 +101,7 @@ class Job:
     verdict: bool = False  # reply must end in a JSON verdict, parsed into AgentOutput.verdict
     tools: list[str] = field(default_factory=list)  # tool names, see idea_refiner.tools
     tool_budget: int = 4  # hard cap on tool calls for this job
+    mcp: list[McpRef] = field(default_factory=list)  # MCP servers (and allowed tools) for this job
 
 
 @dataclass
@@ -115,6 +118,17 @@ class Ctx:
     iteration: int = 1  # revision of the idea being worked on; stamped on every event and phase
     context: ProjectContext | None = None  # project guidelines and per-seat memory
     briefings: dict[str, str] = field(default_factory=dict)  # seat id -> research briefing
+    _mcp: dict[str, list] = field(default_factory=dict)  # server name -> resolved tools, once per run
+    _mcp_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def mcp_tools(self, ref: McpRef) -> list:
+        """Tools of one MCP server, resolved once per run (connecting lists its tools), filtered by
+        ``ref.allow``. Raises when the server cannot be reached."""
+        with self._mcp_lock:
+            if ref.server not in self._mcp:
+                self._mcp[ref.server] = tools.resolve_mcp(self.board.mcp_servers[ref.server])
+        found = self._mcp[ref.server]
+        return found if ref.allow is None else [t for t in found if tools.mcp_tool_name(t) in ref.allow]
 
     def preamble(self, seat: str) -> str:
         """Project brief plus the seat's own notes from earlier runs, in front of every task."""
@@ -153,8 +167,16 @@ def run_jobs(ctx: Ctx, phase: Phase, jobs: list[Job], round_: int | None = None)
         t0 = time.perf_counter()
         spec = ctx.spec(j.llm)
         extra = {"max_iter": j.max_iter} if j.max_iter else {}
-        if j.tools:
-            extra["tools"] = tools.build(j.tools, j.tool_budget)
+        native = []
+        for ref in j.mcp:
+            try:
+                native += [(tools.mcp_display_name(ref.server, t), t) for t in ctx.mcp_tools(ref)]
+            except Exception as e:  # noqa: BLE001 - a server that is down costs the seat a tool, not the run
+                err = f"MCP server '{ref.server}' unavailable: {type(e).__name__}: {str(e)[:200]}"
+                data = {"status": "error", "tool": f"mcp:{ref.server}", "args": "", "error": err}
+                ctx.event("tool", phase=phase, round=round_, agent_id=j.seat, role=j.role, text=err, data=data)
+        if j.tools or native:
+            extra["tools"] = tools.build(j.tools, j.tool_budget, native)
         agent = Agent(
             role=j.role,
             goal=j.goal,
@@ -165,15 +187,16 @@ def run_jobs(ctx: Ctx, phase: Phase, jobs: list[Job], round_: int | None = None)
             **extra,
         )
         description, expected = ctx.preamble(j.seat) + j.description, j.expected
-        if j.tools:
-            description += "\n\n" + t.tool_guidance.format(tools=", ".join(j.tools))
+        if "tools" in extra:
+            names = j.tools + [f"mcp:{r.server}" for r in j.mcp]
+            description += "\n\n" + t.tool_guidance.format(tools=", ".join(names))
         if j.verdict:
             description += "\n\n" + t.verdict_format
             expected += " It ends with the fenced JSON verdict block."
         calls: list[ToolCall] = []
         sources: set[str] = set()
         reporter = _tool_reporter(ctx, phase, round_, j, calls, sources)
-        unroute = tools.route(str(agent.id), reporter) if j.tools else None
+        unroute = tools.route(str(agent.id), reporter) if "tools" in extra else None
         try:
             raw = ctx.execute(agent, Task(description=description, expected_output=expected, agent=agent))
         finally:
@@ -219,7 +242,8 @@ def _tool_reporter(ctx: Ctx, phase: Phase, round_: int | None, j: Job, calls: li
         if kind == "finished":
             call.seconds = round((e.finished_at - e.started_at).total_seconds(), 2)
             out = str(e.output or "")
-            if out and not out.startswith(_NO_RESULT) and " is unavailable (" not in out[:200]:
+            call.empty = not out.strip() or out.startswith(_NO_RESULT) or " is unavailable (" in out[:200]
+            if not call.empty:
                 sources.update(tools.urls_in(out))
                 if isinstance(e.tool_args, dict) and (url := e.tool_args.get("website_url")):
                     sources.add(str(url))
@@ -237,7 +261,8 @@ def seat_job(
 ) -> Job:
     """``phase`` (default: ``mode``) decides whether the seat gets its tools, see BoardSpec.tool_phases."""
     p, t = a.persona(mode), ctx.board.prompts
-    seat_tools = a.tools if (phase or mode) in ctx.board.tool_phases else []
+    in_tool_phase = (phase or mode) in ctx.board.tool_phases
+    seat_tools, seat_mcp = (a.tools, a.mcp) if in_tool_phase else ([], [])
     role, focus = p.role or a.role, p.focus or a.focus
     fmt = dict(role=role, focus=focus, tone=t.hostile_tone if mode == "hostile" else t.coaching_tone)
     return Job(
@@ -248,10 +273,11 @@ def seat_job(
         description=description,
         expected=t.expected_output.format(sentences=t.sentences),
         llm=a.llm,
-        max_iter=a.max_iter or (8 if seat_tools else 3),
+        max_iter=a.max_iter or (8 if seat_tools or seat_mcp else 3),
         tool_budget=a.tool_budget,
         verdict=verdict,
         tools=list(seat_tools),
+        mcp=list(seat_mcp),
     )
 
 
@@ -302,6 +328,7 @@ def run_research(ctx: Ctx, idea: str) -> PhaseResult:
             max_iter=r.max_iter,
             tools=list(r.tools),
             tool_budget=r.tool_budget,
+            mcp=list(r.mcp),
         )
         for a in ctx.board.agents
     ]
@@ -320,7 +347,7 @@ def ground(o: AgentOutput) -> str:
     """Check a research briefing against what its tools returned. With no tool results at all the draft is
     discarded: models happily invent sourced-looking facts when every search failed. Otherwise citations
     no tool returned are listed as unverified."""
-    if not o.sources:
+    if not any(not c.error and not c.empty for c in o.tool_calls):
         errors = [c.error for c in o.tool_calls if c.error]
         why = f" (last error: {errors[-1][:160]})" if errors else ""
         return (
@@ -565,7 +592,13 @@ def run_board(
         raise RunError("deliberation needs the hostile phase: members debate their opening critiques")
     needed = {n for a in board.agents for n in a.tools if set(board.tool_phases) & set(wanted)}
     needed = sorted(needed | (set(board.research.tools) if "research" in wanted else set()))
-    if problems := tools.missing(needed):  # before any LLM call, not halfway through a run
+    problems = tools.missing(needed)  # before any LLM call, not halfway through a run
+    servers = {r.server for a in board.agents for r in a.mcp if set(board.tool_phases) & set(wanted)}
+    servers |= {r.server for r in board.research.mcp} if "research" in wanted else set()
+    for name in sorted(servers):
+        spec = board.mcp_servers[name]
+        problems += tools.mcp_problems(name, spec, bool(board.source), settings.allow_mcp_commands)
+    if problems:
         raise RunError("; ".join(problems))
     refine = refine or board.refine
     loop = refine.max_iterations > 1 and board.verdicts and {"hostile", "synthesis"} <= set(wanted)

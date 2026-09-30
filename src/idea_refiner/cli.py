@@ -296,6 +296,43 @@ def check(provider: ProviderOpt = None, model: ModelOpt = None, base_url: BaseUr
         _fail(f"FAILED {type(e).__name__}: {e}")
 
 
+@app.command("mcp")
+def mcp_list(
+    board: Annotated[str | None, typer.Argument(help="Board name or YAML path (default: startup)")] = None,
+    project: Annotated[str | None, typer.Option("--project", "-P", help="Use a project's board and servers")] = None,
+):
+    """Connect to the MCP servers a board (or project) declares and list the tools each one offers."""
+    from . import tools as agent_tools
+
+    try:
+        spec = (
+            projects.project_board(projects.load_project(project)) if project else boards.load_board(board or "startup")
+        )
+    except (BoardError, ProjectError) as e:
+        _fail(str(e))
+    if not spec.mcp_servers:
+        con.print(f"board '{spec.name}' declares no mcp_servers")
+        return
+    users = {n: [a.id for a in spec.agents if any(r.server == n for r in a.mcp)] for n in spec.mcp_servers}
+    for n, server in spec.mcp_servers.items():
+        where = server.url or " ".join([server.command or "", *server.args])
+        con.rule(f"[bold]{n}[/] [dim]{where}[/]")
+        if problems := agent_tools.mcp_problems(n, server, True, True):
+            err.print("; ".join(problems))
+            continue
+        try:
+            with con.status(f"connecting to {n}..."):
+                found = agent_tools.resolve_mcp(server)
+        except Exception as e:  # noqa: BLE001
+            err.print(f"unavailable: {type(e).__name__}: {e}")
+            continue
+        t = Table("tool", "description")
+        for tool in found:
+            t.add_row(agent_tools.mcp_tool_name(tool), (tool.description or "").strip()[:100])
+        con.print(t)
+        con.print(f"used by: {', '.join(users[n]) or '[dim]no seat yet[/]'}")
+
+
 @app.command("tools")
 def tools_list():
     """Show the agent tools boards can use, and whether each is ready here."""

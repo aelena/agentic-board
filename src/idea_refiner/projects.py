@@ -31,7 +31,7 @@ from .boards import BoardError
 from .config import Settings
 from .config import settings as default_settings
 from .llm import LlmSpec
-from .models import AgentSpec, BoardSpec, ProjectContext, RefineSpec, RunResult
+from .models import AgentSpec, BoardSpec, McpServerSpec, ProjectContext, RefineSpec, RunResult
 
 NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")  # also keeps API-supplied names inside projects_dir
 CONTEXT_FILES = ("guidelines", "voice", "style")
@@ -56,6 +56,7 @@ class ProjectSpec(BaseModel):
     llm: LlmSpec | None = None
     refine: RefineSpec | None = None
     memory: bool = True
+    mcp_servers: dict[str, McpServerSpec] = {}  # added to (and overriding) the board's
 
     @field_validator("llm", mode="before")
     @classmethod
@@ -165,7 +166,8 @@ def project_board(project: Project, settings: Settings = default_settings) -> Bo
             raise ProjectError(f"{f}: {e}") from e
         seats = [s for s in seats if s.id != custom.id] + [custom]
     try:
-        board = base.model_copy(update={"agents": seats, "llm": project.spec.llm or base.llm})
+        servers = {**base.mcp_servers, **project.spec.mcp_servers}
+        board = base.model_copy(update={"agents": seats, "llm": project.spec.llm or base.llm, "mcp_servers": servers})
         return BoardSpec.model_validate(board.model_dump())  # re-run validation (unique ids, min one seat)
     except ValidationError as e:
         raise ProjectError(f"project '{project.name}': {e}") from e

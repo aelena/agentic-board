@@ -7,6 +7,9 @@ loopback and link-local addresses so a prompt-injected URL cannot reach internal
 
 Every call is reported: CrewAI emits tool-usage events on its global bus, and ``route`` sends each one
 to the run and seat that owns the calling agent.
+
+MCP servers declared in a board (``mcp_servers:``) are resolved into tools here and wrapped exactly like
+the built-in ones, so they share the same budget, breaker, output cap and reporting.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ import ipaddress
 import logging
 import os
 import re
+import shutil
 import socket
 import threading
 from collections.abc import Callable
@@ -116,9 +120,10 @@ class Budget:
     broken: dict[str, str] = field(default_factory=dict)  # tool name -> last error
 
 
-def build(names: list[str], budget: int = 6) -> list:
-    """Instantiate the named tools for one job: output capped, ``scrape`` URL-guarded, at most ``budget``
-    calls in total, and a tool that failed twice answers with a stop message instead of being called."""
+def build(names: list[str], budget: int = 6, extra: list[tuple[str, Any]] | None = None) -> list:
+    """Instantiate the named tools for one job, plus ``extra`` (name, ready-made tool) pairs (MCP): output capped,
+    ``scrape`` URL-guarded, at most ``budget`` calls in total across all of them, and a tool that failed
+    twice answers with a stop message instead of being called."""
     from crewai.tools import BaseTool
 
     shared = Budget(budget)
@@ -153,19 +158,82 @@ def build(names: list[str], budget: int = 6) -> list:
             return out if len(out) <= OUTPUT_LIMIT else out[:OUTPUT_LIMIT] + "\n[output truncated]"
 
     logging.getLogger("crewai_tools").setLevel(logging.CRITICAL)  # failures reach us as tool events already
-    tools = []
-    for n in names:
-        inner = REGISTRY[n].factory()
-        tools.append(
-            Capped(
-                name=inner.name,
-                description=inner.description,
-                args_schema=inner.args_schema,
-                inner=inner,
-                guard_urls=n == "scrape",
+    inners = [(i.name, i, n == "scrape") for n in names for i in [REGISTRY[n].factory()]]
+    inners += [(name, t, False) for name, t in extra or []]
+    return [
+        Capped(name=name, description=i.description, args_schema=i.args_schema, inner=i, guard_urls=guard)
+        for name, i, guard in inners
+    ]
+
+
+# --- MCP servers -------------------------------------------------------------------------------------
+
+_VAR = re.compile(r"\$\{(\w+)\}")
+
+
+def interpolate(value: str) -> str:
+    """Replace ``${VAR}`` with the environment variable; a missing one is an error, not an empty string."""
+
+    def sub(m: re.Match) -> str:
+        if (v := os.environ.get(m.group(1))) is None:
+            raise ToolError(f"environment variable {m.group(1)} is not set")
+        return v
+
+    return _VAR.sub(sub, value)
+
+
+def mcp_problems(name: str, spec, from_file: bool, allow_commands: bool) -> list[str]:
+    """Why an MCP server cannot be used, checked before a run starts."""
+    problems = []
+    if spec.command:
+        if not from_file and not allow_commands:
+            problems.append(
+                f"MCP server '{name}' runs a local command, which is only allowed for boards and projects read "
+                "from disk (set REFINER_ALLOW_MCP_COMMANDS=true to allow it for inline boards)"
             )
-        )
-    return tools
+        elif not shutil.which(spec.command):
+            problems.append(f"MCP server '{name}': command '{spec.command}' not found on PATH")
+    for v in [*spec.env.values(), *spec.headers.values(), spec.url or ""]:
+        try:
+            interpolate(v)
+        except ToolError as e:
+            problems.append(f"MCP server '{name}': {e}")
+    return problems
+
+
+def mcp_config(spec):
+    from crewai.mcp.config import MCPServerHTTP, MCPServerSSE, MCPServerStdio
+
+    if spec.command:
+        env = {**os.environ, **{k: interpolate(v) for k, v in spec.env.items()}} if spec.env else None
+        return MCPServerStdio(command=spec.command, args=[interpolate(a) for a in spec.args], env=env)
+    headers = {k: interpolate(v) for k, v in spec.headers.items()} or None
+    url = interpolate(spec.url)
+    if spec.transport == "sse":
+        return MCPServerSSE(url=url, headers=headers)
+    return MCPServerHTTP(url=url, headers=headers, streamable=True)
+
+
+def resolve_mcp(spec) -> list:
+    """Connect to an MCP server, list its tools and return them as CrewAI tools (not yet capped)."""
+    from crewai.events.event_listener import event_listener
+    from crewai.mcp.tool_resolver import MCPToolResolver
+    from crewai.utilities.logger import Logger
+
+    # CrewAI's console listener starts verbose and only a running Crew turns it off; without this every
+    # connection prints "MCP Connection" panels into the CLI and the server log.
+    event_listener.formatter.verbose = False
+    return MCPToolResolver(agent=None, logger=Logger(verbose=False)).resolve([mcp_config(spec)])
+
+
+def mcp_tool_name(tool) -> str:
+    """The name the server itself uses for a tool (CrewAI may prefix it with the server name)."""
+    return getattr(tool, "original_tool_name", None) or tool.name
+
+
+def mcp_display_name(server: str, tool) -> str:
+    """``<server>_<tool>``, the name the model and the reports see; limited to what LLM APIs accept."""
+    return re.sub(r"[^A-Za-z0-9_-]", "_", f"{server}_{mcp_tool_name(tool)}")[:64]
 
 
 # --- routing CrewAI tool events to the seat that made the call --------------------------------------

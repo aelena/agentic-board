@@ -23,6 +23,36 @@ def _parse_llm(v):
     return LlmSpec.parse(v)
 
 
+class McpServerSpec(BaseModel):
+    """An MCP server whose tools seats may use. Either ``command`` (a local process the refiner starts) or
+    ``url`` (a remote server). ``env`` and ``headers`` values may reference ``${VAR}`` from the environment,
+    so secrets stay in .env and out of YAML."""
+
+    command: str | None = None
+    args: list[str] = []
+    env: dict[str, str] = {}
+    url: str | None = None
+    headers: dict[str, str] = {}
+    transport: Literal["http", "sse"] = "http"  # for url servers: streamable HTTP or legacy SSE
+
+    @model_validator(mode="after")
+    def _one_kind(self):
+        if bool(self.command) == bool(self.url):
+            raise ValueError("an MCP server needs exactly one of `command` (local) or `url` (remote)")
+        return self
+
+
+class McpRef(BaseModel):
+    """A seat's use of an MCP server: ``crm`` or ``{server: crm, allow: [search_accounts]}``."""
+
+    server: str
+    allow: list[str] | None = None  # tool names; None = every tool the server offers
+
+
+def _parse_mcp(v):
+    return [McpRef(server=x) if isinstance(x, str) else x for x in v or []]
+
+
 class Persona(BaseModel):
     """Optional per-mode overrides for an agent. Anything left None falls back to templates."""
 
@@ -42,10 +72,12 @@ class AgentSpec(BaseModel):
     coach: Persona = Persona()
     llm: LlmSpec | None = None
     tools: list[str] = []  # names from idea_refiner.tools.REGISTRY, e.g. [web_search, scrape]
+    mcp: list[McpRef] = []  # servers from the board's mcp_servers
     max_iter: int | None = None  # CrewAI reasoning steps; default 3, or 8 for a seat with tools
     tool_budget: int = 4  # hard cap on tool calls per task
 
     parse_llm = field_validator("llm", mode="before")(_parse_llm)
+    parse_mcp = field_validator("mcp", mode="before")(_parse_mcp)
 
     @field_validator("tools")
     @classmethod
@@ -95,11 +127,13 @@ class ResearchSpec(BaseModel):
         "and recent data, and you say plainly when you could not find or verify something."
     )
     tools: list[str] = ["web_search", "scrape"]
+    mcp: list[McpRef] = []  # e.g. an internal knowledge base
     tool_budget: int = 6  # hard cap on tool calls per researcher
     llm: LlmSpec | None = None
     max_iter: int = 8
 
     parse_llm = field_validator("llm", mode="before")(_parse_llm)
+    parse_mcp = field_validator("mcp", mode="before")(_parse_mcp)
 
     @field_validator("tools")
     @classmethod
@@ -256,6 +290,7 @@ class BoardSpec(BaseModel):
     research: ResearchSpec = ResearchSpec()
     verdicts: bool = True  # critics end with a structured kill / pivot / proceed verdict
     tool_phases: list[Phase] = ["hostile"]  # phases in which seats may use their tools (cost control)
+    mcp_servers: dict[str, McpServerSpec] = {}
     deliberation: DeliberationSpec = DeliberationSpec()
     refine: RefineSpec = RefineSpec()
     llm: LlmSpec | None = None  # board-wide default, overrides Settings, overridden by agent.llm
@@ -270,6 +305,13 @@ class BoardSpec(BaseModel):
         if len(ids) != len(set(ids)):
             raise ValueError(f"duplicate agent ids: {sorted({i for i in ids if ids.count(i) > 1})}")
         return v
+
+    @model_validator(mode="after")
+    def _mcp_refs_exist(self):
+        refs = [r.server for a in self.agents for r in a.mcp] + [r.server for r in self.research.mcp]
+        if unknown := sorted(set(refs) - set(self.mcp_servers)):
+            raise ValueError(f"unknown MCP server(s) {unknown}; declare them under mcp_servers")
+        return self
 
 
 # --- results -------------------------------------------------------------------------------------
@@ -313,6 +355,7 @@ class ToolCall(BaseModel):
     args: str  # rendered and clipped, for display
     seconds: float | None = None
     error: str | None = None
+    empty: bool = False  # returned nothing usable (refused, budget used up, tool switched off, no output)
 
 
 class AgentOutput(BaseModel):
