@@ -173,6 +173,36 @@ Prompt templates live under `prompts:` and can be overridden per board (`goal`, 
 LLM resolution order, most specific wins: agent `llm` > request (`--provider`/`--model`, or the API
 body) > board `llm` > environment.
 
+## Agent tools
+
+Seats can use tools to check facts instead of guessing. Tools are referenced by name only, so a board
+cannot make the server run arbitrary code:
+
+| tool         | what it does                                  | needs            |
+|--------------|-----------------------------------------------|------------------|
+| `web_search` | Google results (title, link, snippet)         | `SERPER_API_KEY` (serper.dev) |
+| `scrape`     | text of a public web page, capped at 6000 chars | nothing        |
+
+```bash
+pip install "idea-refiner[tools]"
+refiner tools                 # what is available and ready here
+```
+
+```yaml
+agents:
+  - id: vc
+    role: Hardened Venture Capitalist
+    focus: lack of defensibility and market fit
+    tools: [web_search, scrape]
+tool_phases: [hostile]        # phases where seats may use tools (default); keeps cost bounded
+```
+
+A seat with tools gets up to 8 reasoning steps instead of 3, is asked to cite URLs, and is told to treat
+web content as untrusted data. `scrape` refuses private, loopback and link-local addresses, so a URL
+planted in an idea or a web page cannot reach internal services. Missing keys fail the run before the
+first LLM call. Every tool call is recorded on the agent's output, streamed as a `tool` event and listed
+in the report.
+
 ## Projects: refine one idea over many sessions
 
 A project is a directory holding one idea and everything the board should know about it:
@@ -229,6 +259,7 @@ refiner serve --workers 4     # Linux/macOS; Windows always runs single-process
 |--------|------------------------------|------------------------------------------------------|
 | GET    | `/api/health`                | version, resolved provider                           |
 | GET    | `/api/providers`             | provider catalogue, whether each key is present      |
+| GET    | `/api/tools`                 | agent tools and what each still needs                |
 | GET    | `/api/boards`                | all boards                                           |
 | GET    | `/api/boards/{name}`         | one board                                            |
 | POST   | `/api/boards/validate`       | `{yaml}` -> parsed board or 422 with the error       |
@@ -244,8 +275,8 @@ refiner serve --workers 4     # Linux/macOS; Windows always runs single-process
 | PUT    | `/api/projects/{name}/docs/{doc}` | `{text}` for `idea`, `guidelines`, `voice`, `style` |
 | POST   | `/api/projects/{name}/adopt` | `{run_id?}`: refined idea becomes `idea.md`           |
 
-Event types: `run_start`, `phase_start`, `agent_start`, `agent_done`, `phase_done`, `decision`, `run_done`,
-`error`. Events carry `round` for deliberation and a `data` payload: the verdict on `agent_done`, the tally on
+Event types: `run_start`, `phase_start`, `agent_start`, `agent_done`, `phase_done`, `decision`, `tool`,
+`run_done`, `error`. Events carry `round` for deliberation and a `data` payload: the verdict on `agent_done`, the tally on
 `phase_done`, `{action, by}` on `decision` (closing, continuing or skipping a debate; `iterate` or `stop` for
 the refine loop, with no `phase`). Every event carries `iteration`. The chair shows up as `agent_id: chair`.
 
@@ -294,6 +325,7 @@ src/idea_refiner/
   engine.py     hostile -> coaching -> synthesis on CrewAI, parallel jobs, emits events
   verdicts.py   parse agent verdicts, tally the board
   projects.py   project directories, board mixing, context and memory
+  tools.py      agent tool registry, URL guard, tool-call routing
   report.py     markdown / json / pdf
   cli.py        typer CLI
   api/          Sanic app, run store, httpx client
@@ -315,9 +347,8 @@ Design notes:
   configurable synthesizers, supporting the main board members.
 - **Structured output**: upload a JSON template and get schema-validated agent output.
 - **Report templates**: render the report into a user-supplied `.docx` (corporate template).
-- **Agent tools**: `crewai_tools` built-ins referenced by name from YAML (scraper, search), then opt-in
-  user Python tool scripts loaded from a local plugin directory, disabled by default and never via upload
-  without explicit configuration.
+- **Tool scripts**: opt-in user Python tools loaded from a local plugin directory, disabled by default and
+  never via upload without explicit configuration.
 - **MCP servers**: user-configured MCP servers (internal tools, APIs, knowledge bases) exposed to agents
   as tools.
 - **Voice input**: record in the browser, transcribe, send to the board.

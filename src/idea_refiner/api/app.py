@@ -1,7 +1,7 @@
 """Sanic REST API.
 
     GET  /api/health
-    GET  /api/providers
+    GET  /api/providers              GET /api/tools
     GET  /api/boards                 GET /api/boards/<name>        POST /api/boards/validate {yaml}
     POST /api/runs {RunRequest}      -> 202 {id}
     GET  /api/runs                   GET /api/runs/<id>            DELETE /api/runs/<id>
@@ -120,6 +120,22 @@ def create_app(
     @app.get("/api/providers")
     async def providers(_: Request):
         return json(_providers())
+
+    @app.get("/api/tools")
+    async def list_tools(_: Request):
+        from .. import tools as agent_tools
+
+        return json(
+            [
+                {
+                    "name": d.name,
+                    "description": d.description,
+                    "env": list(d.env),
+                    "problems": agent_tools.missing([d.name]),
+                }
+                for d in agent_tools.REGISTRY.values()
+            ]
+        )
 
     @app.get("/api/boards")
     async def list_boards(_: Request):

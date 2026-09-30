@@ -139,6 +139,11 @@ class Progress:
                 verdict = (e.data or {}).get("verdict")
                 sub = Verdict.model_validate(verdict).as_text() if verdict else None
                 con.print(Panel(Markdown(e.text or ""), title=f"[cyan]{e.role}[/]", subtitle=sub, border_style="dim"))
+            case "tool":
+                d = e.data or {}
+                took = f" ({d['seconds']}s)" if d.get("seconds") is not None else ""
+                failed = f" [red]failed: {d['error']}[/]" if d.get("error") else ""
+                con.print(f"  [dim]{e.agent_id} -> {d.get('tool')}({d.get('args', '')}){took}[/]{failed}")
             case "phase_done":
                 if tally := (e.data or {}).get("tally"):
                     con.print(f"[bold]board verdict:[/] {Tally.model_validate(tally).as_text()}")
@@ -283,6 +288,20 @@ def check(provider: ProviderOpt = None, model: ModelOpt = None, base_url: BaseUr
         con.print(f"[green]OK[/] {name} answered: {str(reply).strip()[:80]}")
     except Exception as e:  # noqa: BLE001
         _fail(f"FAILED {type(e).__name__}: {e}")
+
+
+@app.command("tools")
+def tools_list():
+    """Show the agent tools boards can use, and whether each is ready here."""
+    from . import tools as agent_tools
+
+    t = Table("tool", "description", "needs", "ready")
+    for d in agent_tools.REGISTRY.values():
+        problems = agent_tools.missing([d.name])
+        ready = "[green]yes[/]" if not problems else f"[red]no[/] [dim]{'; '.join(problems)}[/]"
+        t.add_row(d.name, d.description, ", ".join(d.env) or "-", ready)
+    con.print(t)
+    con.print("Use them per seat in board YAML: tools: [web_search, scrape]", markup=False)
 
 
 @app.command()

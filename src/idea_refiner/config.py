@@ -11,8 +11,15 @@ import os
 import warnings
 from pathlib import Path
 
+from dotenv import dotenv_values
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Settings reads REFINER_* from .env itself, but vendor keys (OPENAI_API_KEY, SERPER_API_KEY...) are read
+# from the process environment by LiteLLM and crewai-tools, so export those. Real environment variables win.
+for _k, _v in dotenv_values(".env").items():
+    if _v and not _k.startswith("REFINER_"):
+        os.environ.setdefault(_k, _v)
 
 # CrewAI phones home unless told otherwise. Off by default; users can re-enable explicitly.
 os.environ.setdefault("CREWAI_TELEMETRY_OPT_OUT", "true")

@@ -16,9 +16,10 @@ import re
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from . import tools
 from .config import PROVIDERS, Settings
 from .config import settings as default_settings
 from .llm import LlmSpec, build_llm, describe, resolve
@@ -37,6 +38,7 @@ from .models import (
     RefineSpec,
     RunResult,
     Tally,
+    ToolCall,
 )
 from .verdicts import extract_json, parse_verdict, tally
 
@@ -95,6 +97,7 @@ class Job:
     llm: LlmSpec | None = None  # the seat's own spec; request and board layers are added at run time
     max_iter: int | None = None
     verdict: bool = False  # reply must end in a JSON verdict, parsed into AgentOutput.verdict
+    tools: list[str] = field(default_factory=list)  # tool names, see idea_refiner.tools
 
 
 @dataclass
@@ -148,6 +151,8 @@ def run_jobs(ctx: Ctx, phase: Phase, jobs: list[Job], round_: int | None = None)
         t0 = time.perf_counter()
         spec = ctx.spec(j.llm)
         extra = {"max_iter": j.max_iter} if j.max_iter else {}
+        if j.tools:
+            extra["tools"] = tools.build(j.tools)
         agent = Agent(
             role=j.role,
             goal=j.goal,
@@ -158,16 +163,25 @@ def run_jobs(ctx: Ctx, phase: Phase, jobs: list[Job], round_: int | None = None)
             **extra,
         )
         description, expected = ctx.preamble(j.seat) + j.description, j.expected
+        if j.tools:
+            description += "\n\n" + t.tool_guidance.format(tools=", ".join(j.tools))
         if j.verdict:
             description += "\n\n" + t.verdict_format
             expected += " It ends with the fenced JSON verdict block."
-        raw = ctx.execute(agent, Task(description=description, expected_output=expected, agent=agent))
+        calls: list[ToolCall] = []
+        unroute = tools.route(str(agent.id), _tool_reporter(ctx, phase, round_, j, calls)) if j.tools else None
+        try:
+            raw = ctx.execute(agent, Task(description=description, expected_output=expected, agent=agent))
+        finally:
+            if unroute:
+                unroute()
         text, verdict = parse_verdict(raw) if j.verdict else (raw.strip(), None)
         out = AgentOutput(
             agent_id=j.seat,
             role=j.role,
             text=text,
             verdict=verdict,
+            tool_calls=calls,
             model=describe(spec, ctx.settings),
             seconds=round(time.perf_counter() - t0, 2),
         )
@@ -181,8 +195,35 @@ def run_jobs(ctx: Ctx, phase: Phase, jobs: list[Job], round_: int | None = None)
         return list(pool.map(one, jobs))
 
 
-def seat_job(ctx: Ctx, a: AgentSpec, mode: Mode, description: str, verdict: bool = False) -> Job:
+def _clip_args(args) -> str:
+    text = ", ".join(f"{k}={v!r}" for k, v in args.items()) if isinstance(args, dict) else str(args)
+    return text if len(text) <= 160 else text[:157] + "..."
+
+
+def _tool_reporter(ctx: Ctx, phase: Phase, round_: int | None, j: Job, calls: list[ToolCall]):
+    """Turn CrewAI tool events for one agent into ``tool`` events and ToolCall records."""
+
+    def on(kind: str, e) -> None:
+        if kind == "started":  # CrewAI runs handlers in a pool, so a start can arrive after its finish
+            return
+        call = ToolCall(tool=e.tool_name, args=_clip_args(e.tool_args))
+        if kind == "finished":
+            call.seconds = round((e.finished_at - e.started_at).total_seconds(), 2)
+        else:
+            call.error = str(e.error)[:300]
+        calls.append(call)
+        data = {"status": kind, **call.model_dump(exclude_none=True)}
+        ctx.event("tool", phase=phase, round=round_, agent_id=j.seat, role=j.role, text=call.tool, data=data)
+
+    return on
+
+
+def seat_job(
+    ctx: Ctx, a: AgentSpec, mode: Mode, description: str, verdict: bool = False, phase: Phase | None = None
+) -> Job:
+    """``phase`` (default: ``mode``) decides whether the seat gets its tools, see BoardSpec.tool_phases."""
     p, t = a.persona(mode), ctx.board.prompts
+    seat_tools = a.tools if (phase or mode) in ctx.board.tool_phases else []
     role, focus = p.role or a.role, p.focus or a.focus
     fmt = dict(role=role, focus=focus, tone=t.hostile_tone if mode == "hostile" else t.coaching_tone)
     return Job(
@@ -193,8 +234,9 @@ def seat_job(ctx: Ctx, a: AgentSpec, mode: Mode, description: str, verdict: bool
         description=description,
         expected=t.expected_output.format(sentences=t.sentences),
         llm=a.llm,
-        max_iter=a.max_iter,
+        max_iter=a.max_iter or (8 if seat_tools else 3),
         verdict=verdict,
+        tools=list(seat_tools),
     )
 
 
@@ -293,7 +335,7 @@ def run_deliberation(ctx: Ctx, idea: str, opening: PhaseResult) -> list[PhaseRes
                 question=f"## The chair asks you\n{q}\n\n" if q else "",
                 sentences=t.sentences,
             )
-            jobs.append(seat_job(ctx, a, "hostile", description, verdict=ctx.board.verdicts))
+            jobs.append(seat_job(ctx, a, "hostile", description, ctx.board.verdicts, phase="deliberation"))
         this = _phase(ctx, "deliberation", jobs, verdicts=ctx.board.verdicts, round_=n)
         rounds.append(this)
         if spec.stop_on_consensus and this.tally and this.tally.unanimous:
@@ -448,6 +490,9 @@ def run_board(
         raise RunError("no phases selected")
     if "deliberation" in wanted and "hostile" not in wanted:
         raise RunError("deliberation needs the hostile phase: members debate their opening critiques")
+    needed = sorted({n for a in board.agents for n in a.tools if set(board.tool_phases) & set(wanted)})
+    if problems := tools.missing(needed):  # before any LLM call, not halfway through a run
+        raise RunError("; ".join(problems))
     refine = refine or board.refine
     loop = refine.max_iterations > 1 and board.verdicts and {"hostile", "synthesis"} <= set(wanted)
     max_n = refine.max_iterations if loop else 1

@@ -36,7 +36,11 @@
       if (e.type === 'phase_start') out.push({ key: keyOf(e), phase: e.phase, round: e.round, iteration: e.iteration ?? 1, done: false, cards: [] })
       const s = e.phase ? find(e) : null
       if (!s) continue
-      if (e.type === 'agent_start' && e.agent_id !== 'chair') s.cards.push({ agent_id: e.agent_id, role: e.role, text: '', done: false })
+      if (e.type === 'agent_start' && e.agent_id !== 'chair') s.cards.push({ agent_id: e.agent_id, role: e.role, text: '', done: false, tool_calls: [] })
+      if (e.type === 'tool') {
+        const c = s.cards.find((c) => c.agent_id === e.agent_id)
+        if (c) c.tool_calls = [...(c.tool_calls ?? []), e.data]
+      }
       if (e.type === 'agent_start' && e.agent_id === 'chair') s.chairPending = true
       if (e.type === 'agent_done' && e.agent_id === 'chair') { s.chairPending = false; s.chair = { summary: e.text } }
       else if (e.type === 'agent_done') {
@@ -110,6 +114,11 @@
         <h3>{c.role} {#if !c.done}<span class="spinner"></span>{/if}
           {#if c.verdict}<span class="verdict v-{c.verdict.decision}">{c.verdict.decision} {c.verdict.score}/10</span>{/if}</h3>
         {#if c.done}<div class="md">{@html md(c.text)}</div>{:else}<p class="muted">thinking...</p>{/if}
+        {#if c.tool_calls?.length}
+          <details class="tools"><summary>{c.tool_calls.length} tool call{c.tool_calls.length > 1 ? 's' : ''}</summary>
+            <ul>{#each c.tool_calls as t}<li><code>{t.tool}</code> {t.args}{#if t.error} <span class="err">failed</span>{/if}</li>{/each}</ul>
+          </details>
+        {/if}
         {#if c.verdict?.issues?.length}<ul class="issues">{#each c.verdict.issues as i}<li>{i}</li>{/each}</ul>{/if}
       </article>
     {/each}

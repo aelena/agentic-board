@@ -26,7 +26,7 @@ export const api = {
   /** Subscribe to a run's SSE stream. Returns a stop function. */
   events(id, onEvent, onEnd) {
     const es = new EventSource(`/api/runs/${id}/events`)
-    const types = ['run_start', 'phase_start', 'agent_start', 'agent_done', 'phase_done', 'decision', 'run_done', 'error']
+    const types = ['run_start', 'phase_start', 'agent_start', 'agent_done', 'phase_done', 'decision', 'tool', 'run_done', 'error']
     for (const t of types) {
       es.addEventListener(t, (m) => {
         const e = JSON.parse(m.data)
