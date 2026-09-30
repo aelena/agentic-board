@@ -27,7 +27,7 @@ def client(app):
         yield c
 
 
-def _wait_done(client, run_id: str, tries: int = 100) -> dict:
+def _wait_done(client, run_id: str, tries: int = 300) -> dict:  # 60s: the first run pays the crewai import
     for _ in range(tries):
         _, r = client.get(f"/api/runs/{run_id}")
         if r.json["status"] in ("done", "error"):
