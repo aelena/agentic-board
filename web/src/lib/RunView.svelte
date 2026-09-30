@@ -4,7 +4,7 @@
 
   let { run, onback } = $props()
 
-  const TITLES = { hostile: 'Hostile feedback', deliberation: 'Deliberation', coaching: 'Coaching advice', synthesis: 'Refined pitch' }
+  const TITLES = { research: 'Research briefings', hostile: 'Hostile feedback', deliberation: 'Deliberation', coaching: 'Coaching advice', synthesis: 'Refined pitch' }
   const keyOf = (x) => `${x.iteration ?? 1}:${x.phase}:${x.round ?? ''}`
 
   // Ordered sections (one per phase, per deliberation round, per iteration), built from either the live

@@ -64,6 +64,7 @@ pre { white-space: pre-wrap; }
 .phase.hostile h2 { color: var(--hostile); }
 .phase.coaching h2 { color: var(--coaching); }
 .phase.synthesis h2 { color: var(--synthesis); }
+.phase.research h2 { color: var(--muted); }
 .phase.deliberation h2 { color: var(--deliberation); }
 .card.chair { border-left: 3px solid var(--deliberation); }
 .revision { font-size: 17px; margin: 28px 0 0; padding-top: 12px; border-top: 2px solid var(--border); }

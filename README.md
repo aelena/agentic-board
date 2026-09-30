@@ -12,7 +12,7 @@ sharing one engine.
 
 ## How it works
 
-Every board runs up to four phases:
+Every board runs up to four phases (plus an optional research phase first, see [Agent tools](#agent-tools)):
 
 1. **Hostile**: each agent tears the idea apart from its own domain and ends with a verdict.
 2. **Deliberation**: the critics read each other and rebut or concede, round after round. After each
@@ -197,11 +197,32 @@ agents:
 tool_phases: [hostile]        # phases where seats may use tools (default); keeps cost bounded
 ```
 
-A seat with tools gets up to 8 reasoning steps instead of 3, is asked to cite URLs, and is told to treat
-web content as untrusted data. `scrape` refuses private, loopback and link-local addresses, so a URL
+A seat with tools gets up to 8 reasoning steps instead of 3 and a hard budget of 4 tool calls
+(`tool_budget`); a tool that fails twice is switched off for the rest of that task. Seats are asked to cite
+URLs and told to treat web content as untrusted data. `scrape` refuses private, loopback and link-local addresses, so a URL
 planted in an idea or a web page cannot reach internal services. Missing keys fail the run before the
 first LLM call. Every tool call is recorded on the agent's output, streamed as a `tool` event and listed
 in the report.
+
+### Research phase
+
+`refiner run --research` (or the research checkbox, `"research": true` in the API, or `research` in a
+board's `phases`) adds a phase before the hostile round: one researcher per seat, in parallel, looks for
+evidence on that seat's concern (the VC's researcher on defensibility and market fit, the counsel's on
+regulation...). Each critic then gets its own briefing and is asked to cite it or dispute it. Research runs
+once per run, not per refine revision.
+
+Briefings are checked against what the tools actually returned. If no tool call returned anything, the
+draft is discarded and the critics are told research was unavailable: models readily invent
+sourced-looking facts when every search failed. Citations no tool returned are listed as unverified.
+
+```yaml
+research:                        # optional; these are the defaults
+  role: Research Analyst
+  tools: [web_search, scrape]
+  tool_budget: 6
+  # llm: openai/gpt-4o           # research can use its own model
+```
 
 ## Projects: refine one idea over many sessions
 
@@ -263,7 +284,7 @@ refiner serve --workers 4     # Linux/macOS; Windows always runs single-process
 | GET    | `/api/boards`                | all boards                                           |
 | GET    | `/api/boards/{name}`         | one board                                            |
 | POST   | `/api/boards/validate`       | `{yaml}` -> parsed board or 422 with the error       |
-| POST   | `/api/runs`                  | `{idea, board?, project?, llm?, phases?, title?, refine?}` -> 202 `{id}` |
+| POST   | `/api/runs`                  | `{idea, board?, project?, llm?, phases?, title?, refine?, research?}` -> 202 `{id}` |
 | GET    | `/api/runs`                  | run summaries, newest first                          |
 | GET    | `/api/runs/{id}`             | status plus full result when done                    |
 | GET    | `/api/runs/{id}/events`      | Server-Sent Events: replays history, then streams    |

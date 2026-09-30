@@ -93,6 +93,7 @@ def create_app(
                 phases=req.phases,
                 title=req.title,
                 refine=refine,
+                research=req.research,
                 context=context,
                 settings=settings,
                 emit=emit,

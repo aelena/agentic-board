@@ -190,6 +190,9 @@ def run(
     target: Annotated[
         float | None, typer.Option("--target", min=0, max=10, help="Board mean score that ends the loop (default 7)")
     ] = None,
+    research: Annotated[
+        bool, typer.Option("--research", "-r", help="Research phase first: web evidence per seat (needs tools)")
+    ] = False,
     as_json: Annotated[bool, typer.Option("--json", help="Print the RunResult as JSON instead of a report")] = False,
     quiet: Annotated[bool, typer.Option("--quiet", "-q", help="No live progress, only the final output")] = False,
 ):
@@ -209,6 +212,7 @@ def run(
         phases=phases or None,
         title=title,
         refine=_refine(iterate, target),
+        research=research,
     )
     progress = Progress(quiet or as_json)
     settings = default_settings if out is None else Settings(runs_dir=out)
@@ -233,6 +237,7 @@ def run(
                 phases=req.phases,
                 title=title,
                 refine=req.refine or prep.refine,
+                research=research,
                 context=prep.context,
                 settings=settings,
                 emit=progress,
@@ -250,6 +255,7 @@ def run(
                 phases=req.phases,
                 title=title,
                 refine=req.refine,
+                research=research,
                 settings=settings,
                 emit=progress,
             )

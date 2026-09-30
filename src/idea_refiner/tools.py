@@ -14,10 +14,11 @@ from __future__ import annotations
 import ipaddress
 import logging
 import os
+import re
 import socket
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
 
@@ -96,20 +97,59 @@ def public_url(url: str) -> bool:
     return True
 
 
-def build(names: list[str]) -> list:
-    """Instantiate the named tools, each wrapped to cap its output (and guard URLs for ``scrape``)."""
+URL = re.compile(r"https?://[^\s\"'<>)\]}]+")
+BREAK_AFTER = 2  # failures of one tool before it is switched off for the rest of the job
+
+
+def urls_in(text: str) -> set[str]:
+    return {u.rstrip(".,;:") for u in URL.findall(text)}
+
+
+@dataclass
+class Budget:
+    """Shared by one job's tools. Prompts alone do not stop a model from calling a failing tool 30 times,
+    so the cap and the breaker are enforced here."""
+
+    limit: int
+    used: int = 0
+    failures: dict[str, int] = field(default_factory=dict)
+    broken: dict[str, str] = field(default_factory=dict)  # tool name -> last error
+
+
+def build(names: list[str], budget: int = 6) -> list:
+    """Instantiate the named tools for one job: output capped, ``scrape`` URL-guarded, at most ``budget``
+    calls in total, and a tool that failed twice answers with a stop message instead of being called."""
     from crewai.tools import BaseTool
+
+    shared = Budget(budget)
 
     class Capped(BaseTool):
         inner: Any
         guard_urls: bool = False
 
         def _run(self, **kwargs: Any) -> str:
+            if self.name in shared.broken:
+                return (
+                    f"{self.name} is unavailable ({shared.broken[self.name]}). Do not call it again. Answer with "
+                    "what you have and say plainly what you could not verify."
+                )
+            if shared.used >= shared.limit:
+                return (
+                    f"Tool budget used up ({shared.limit} calls). Answer now with what you have and say plainly "
+                    "what you could not verify."
+                )
+            shared.used += 1
             if self.guard_urls:
                 url = str(kwargs.get("website_url") or kwargs.get("url") or "")
                 if not public_url(url):
                     return f"Refused: {url!r} is not a public http(s) address."
-            out = str(self.inner.run(**kwargs))
+            try:
+                out = str(self.inner.run(**kwargs))
+            except Exception as e:
+                shared.failures[self.name] = shared.failures.get(self.name, 0) + 1
+                if shared.failures[self.name] >= BREAK_AFTER:
+                    shared.broken[self.name] = f"{type(e).__name__}: {str(e)[:120]}"
+                raise
             return out if len(out) <= OUTPUT_LIMIT else out[:OUTPUT_LIMIT] + "\n[output truncated]"
 
     logging.getLogger("crewai_tools").setLevel(logging.CRITICAL)  # failures reach us as tool events already

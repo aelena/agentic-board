@@ -98,6 +98,7 @@ class Job:
     max_iter: int | None = None
     verdict: bool = False  # reply must end in a JSON verdict, parsed into AgentOutput.verdict
     tools: list[str] = field(default_factory=list)  # tool names, see idea_refiner.tools
+    tool_budget: int = 4  # hard cap on tool calls for this job
 
 
 @dataclass
@@ -113,6 +114,7 @@ class Ctx:
     concurrency: int = 1
     iteration: int = 1  # revision of the idea being worked on; stamped on every event and phase
     context: ProjectContext | None = None  # project guidelines and per-seat memory
+    briefings: dict[str, str] = field(default_factory=dict)  # seat id -> research briefing
 
     def preamble(self, seat: str) -> str:
         """Project brief plus the seat's own notes from earlier runs, in front of every task."""
@@ -152,7 +154,7 @@ def run_jobs(ctx: Ctx, phase: Phase, jobs: list[Job], round_: int | None = None)
         spec = ctx.spec(j.llm)
         extra = {"max_iter": j.max_iter} if j.max_iter else {}
         if j.tools:
-            extra["tools"] = tools.build(j.tools)
+            extra["tools"] = tools.build(j.tools, j.tool_budget)
         agent = Agent(
             role=j.role,
             goal=j.goal,
@@ -169,7 +171,9 @@ def run_jobs(ctx: Ctx, phase: Phase, jobs: list[Job], round_: int | None = None)
             description += "\n\n" + t.verdict_format
             expected += " It ends with the fenced JSON verdict block."
         calls: list[ToolCall] = []
-        unroute = tools.route(str(agent.id), _tool_reporter(ctx, phase, round_, j, calls)) if j.tools else None
+        sources: set[str] = set()
+        reporter = _tool_reporter(ctx, phase, round_, j, calls, sources)
+        unroute = tools.route(str(agent.id), reporter) if j.tools else None
         try:
             raw = ctx.execute(agent, Task(description=description, expected_output=expected, agent=agent))
         finally:
@@ -182,6 +186,7 @@ def run_jobs(ctx: Ctx, phase: Phase, jobs: list[Job], round_: int | None = None)
             text=text,
             verdict=verdict,
             tool_calls=calls,
+            sources=sorted(sources),
             model=describe(spec, ctx.settings),
             seconds=round(time.perf_counter() - t0, 2),
         )
@@ -200,8 +205,12 @@ def _clip_args(args) -> str:
     return text if len(text) <= 160 else text[:157] + "..."
 
 
-def _tool_reporter(ctx: Ctx, phase: Phase, round_: int | None, j: Job, calls: list[ToolCall]):
-    """Turn CrewAI tool events for one agent into ``tool`` events and ToolCall records."""
+_NO_RESULT = ("Refused:", "Tool budget used up")
+
+
+def _tool_reporter(ctx: Ctx, phase: Phase, round_: int | None, j: Job, calls: list[ToolCall], sources: set[str]):
+    """Turn CrewAI tool events for one agent into ``tool`` events, ToolCall records, and the set of URLs
+    the tools really returned (search result links, successfully scraped pages)."""
 
     def on(kind: str, e) -> None:
         if kind == "started":  # CrewAI runs handlers in a pool, so a start can arrive after its finish
@@ -209,6 +218,11 @@ def _tool_reporter(ctx: Ctx, phase: Phase, round_: int | None, j: Job, calls: li
         call = ToolCall(tool=e.tool_name, args=_clip_args(e.tool_args))
         if kind == "finished":
             call.seconds = round((e.finished_at - e.started_at).total_seconds(), 2)
+            out = str(e.output or "")
+            if out and not out.startswith(_NO_RESULT) and " is unavailable (" not in out[:200]:
+                sources.update(tools.urls_in(out))
+                if isinstance(e.tool_args, dict) and (url := e.tool_args.get("website_url")):
+                    sources.add(str(url))
         else:
             call.error = str(e.error)[:300]
         calls.append(call)
@@ -235,6 +249,7 @@ def seat_job(
         expected=t.expected_output.format(sentences=t.sentences),
         llm=a.llm,
         max_iter=a.max_iter or (8 if seat_tools else 3),
+        tool_budget=a.tool_budget,
         verdict=verdict,
         tools=list(seat_tools),
     )
@@ -262,7 +277,63 @@ def run_phase(ctx: Ctx, mode: Mode, idea: str, feedback: str | None = None, prea
     template = t.hostile_task if mode == "hostile" else t.coaching_task
     description = preamble + template.format(idea=idea, feedback=feedback or "", sentences=t.sentences)
     verdicts = mode == "hostile" and ctx.board.verdicts
-    return _phase(ctx, mode, [seat_job(ctx, a, mode, description, verdicts) for a in ctx.board.agents], verdicts)
+
+    def briefed(seat: str) -> str:
+        b = ctx.briefings.get(seat)
+        return (t.briefing_context.format(briefing=b) if b else "") + description
+
+    jobs = [seat_job(ctx, a, mode, briefed(a.id), verdicts) for a in ctx.board.agents]
+    return _phase(ctx, mode, jobs, verdicts)
+
+
+def run_research(ctx: Ctx, idea: str) -> PhaseResult:
+    """One researcher per seat, in parallel, each looking for evidence on that seat's concern. The
+    briefings are kept on ``ctx`` and prepended to that seat's hostile and coaching tasks."""
+    r, t = ctx.board.research, ctx.board.prompts
+    jobs = [
+        Job(
+            seat=a.id,
+            role=f"{r.role} for the {a.role}",
+            goal=r.goal,
+            backstory=r.backstory,
+            description=t.research_task.format(idea=idea, role=a.role, focus=a.focus, points=t.research_points),
+            expected=t.research_expected,
+            llm=r.llm,
+            max_iter=r.max_iter,
+            tools=list(r.tools),
+            tool_budget=r.tool_budget,
+        )
+        for a in ctx.board.agents
+    ]
+    result = _phase(ctx, "research", jobs, verdicts=False)
+    for o in result.outputs:
+        o.text = ground(o)
+    ctx.briefings = {o.agent_id: o.text for o in result.outputs if o.text.strip()}
+    return result
+
+
+def _norm(url: str) -> str:
+    return url.rstrip("/").lower()
+
+
+def ground(o: AgentOutput) -> str:
+    """Check a research briefing against what its tools returned. With no tool results at all the draft is
+    discarded: models happily invent sourced-looking facts when every search failed. Otherwise citations
+    no tool returned are listed as unverified."""
+    if not o.sources:
+        errors = [c.error for c in o.tool_calls if c.error]
+        why = f" (last error: {errors[-1][:160]})" if errors else ""
+        return (
+            f"Research unavailable: no tool call returned results{why}. The researcher's draft was discarded "
+            "because nothing in it could be verified. Rely on your own judgement and say where facts are missing."
+        )
+    known = {_norm(u) for u in o.sources}
+    cited = sorted(tools.urls_in(o.text))
+    unverified = [u for u in cited if not any(_norm(u) == k or _norm(u).startswith(k + "/") for k in known)]
+    if not unverified:
+        return o.text
+    listed = "\n".join(f"- {u}" for u in unverified)
+    return f"{o.text}\n\n**Unverified citations** (no tool returned these; treat the facts behind them as claims):\n{listed}"
 
 
 def _positions(p: PhaseResult) -> dict[str, str | None]:
@@ -471,6 +542,7 @@ def run_board(
     phases: list[Phase] | None = None,
     title: str | None = None,
     refine: RefineSpec | None = None,
+    research: bool = False,
     context: ProjectContext | None = None,
     settings: Settings = default_settings,
     emit: Emit = _noop,
@@ -485,12 +557,14 @@ def run_board(
     the iteration limit is reached. A judged revision the loop stops on gets no coaching or synthesis:
     the pitch that was just judged is the result.
     """
-    wanted = [p for p in ALL_PHASES if p in (board.phases if phases is None else phases)]
+    chosen = set(board.phases if phases is None else phases) | ({"research"} if research else set())
+    wanted = [p for p in ALL_PHASES if p in chosen]
     if not wanted:
         raise RunError("no phases selected")
     if "deliberation" in wanted and "hostile" not in wanted:
         raise RunError("deliberation needs the hostile phase: members debate their opening critiques")
-    needed = sorted({n for a in board.agents for n in a.tools if set(board.tool_phases) & set(wanted)})
+    needed = {n for a in board.agents for n in a.tools if set(board.tool_phases) & set(wanted)}
+    needed = sorted(needed | (set(board.research.tools) if "research" in wanted else set()))
     if problems := tools.missing(needed):  # before any LLM call, not halfway through a run
         raise RunError("; ".join(problems))
     refine = refine or board.refine
@@ -518,6 +592,8 @@ def run_board(
 
     try:
         current, prev = result.idea, None
+        if "research" in wanted:  # once per run: the market does not change between revisions
+            result.phases.append(run_research(ctx, current))
         for n in range(1, max_n + 1):
             ctx.iteration = n
             it = IterationSummary(n=n, idea=current)

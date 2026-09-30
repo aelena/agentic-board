@@ -7,6 +7,7 @@ from pathlib import Path
 from .models import PhaseResult, RunResult
 
 PHASE_TITLES = {
+    "research": "Research briefings",
     "hostile": "Hostile feedback (brutal truth)",
     "deliberation": "Deliberation",
     "coaching": "Coaching advice (actionable fixes)",

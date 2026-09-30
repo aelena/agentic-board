@@ -12,6 +12,7 @@
   let phases = $state({ hostile: true, deliberation: true, coaching: true, synthesis: true })
   let busy = $state(false)
   let iterations = $state(1)
+  let research = $state(false)
   let target = $state(7)
   let project = $state('')
   let saveAs = $state('')
@@ -46,6 +47,7 @@
       llm: Object.keys(llm).length ? llm : null,
       phases: Object.entries(phases).filter(([, v]) => v).map(([k]) => k),
       refine: iterations > 1 ? { max_iterations: iterations, target_score: target } : null,
+      research,
     })
     busy = false
   }
@@ -119,6 +121,7 @@
         {#each Object.keys(phases) as p}
           <label style="display:flex;gap:4px;align-items:center;color:inherit"><input type="checkbox" bind:checked={phases[p]} /> {p}</label>
         {/each}
+        <label style="display:flex;gap:4px;align-items:center;color:inherit" title="One web researcher per seat before the hostile round (needs SERPER_API_KEY)"><input type="checkbox" bind:checked={research} /> research</label>
       </div>
     </div>
     <div style="flex:0 0 120px">

@@ -12,8 +12,9 @@ from .llm import LlmSpec
 from .tools import TOOL_NAMES
 
 Mode = Literal["hostile", "coaching"]
-Phase = Literal["hostile", "deliberation", "coaching", "synthesis"]
-ALL_PHASES: tuple[Phase, ...] = ("hostile", "deliberation", "coaching", "synthesis")
+Phase = Literal["research", "hostile", "deliberation", "coaching", "synthesis"]
+ALL_PHASES: tuple[Phase, ...] = ("research", "hostile", "deliberation", "coaching", "synthesis")
+DEFAULT_PHASES: list[Phase] = ["hostile", "deliberation", "coaching", "synthesis"]  # research is opt-in: it needs keys
 Decision = Literal["kill", "pivot", "proceed"]
 DECISIONS: tuple[Decision, ...] = ("kill", "pivot", "proceed")  # most severe first
 
@@ -42,6 +43,7 @@ class AgentSpec(BaseModel):
     llm: LlmSpec | None = None
     tools: list[str] = []  # names from idea_refiner.tools.REGISTRY, e.g. [web_search, scrape]
     max_iter: int | None = None  # CrewAI reasoning steps; default 3, or 8 for a seat with tools
+    tool_budget: int = 4  # hard cap on tool calls per task
 
     parse_llm = field_validator("llm", mode="before")(_parse_llm)
 
@@ -80,6 +82,31 @@ class ChairSpec(BaseModel):
     llm: LlmSpec | None = None
 
     parse_llm = field_validator("llm", mode="before")(_parse_llm)
+
+
+class ResearchSpec(BaseModel):
+    """The research phase: before the hostile round, one researcher per seat gathers sourced evidence on
+    that seat's concern, and each critic gets its own briefing. Runs once per run, not per revision."""
+
+    role: str = "Research Analyst"
+    goal: str = "Find the facts that decide whether this idea survives: evidence with sources, not opinions"
+    backstory: str = (
+        "You are a meticulous analyst. You search before you conclude, cite every source, prefer primary sources "
+        "and recent data, and you say plainly when you could not find or verify something."
+    )
+    tools: list[str] = ["web_search", "scrape"]
+    tool_budget: int = 6  # hard cap on tool calls per researcher
+    llm: LlmSpec | None = None
+    max_iter: int = 8
+
+    parse_llm = field_validator("llm", mode="before")(_parse_llm)
+
+    @field_validator("tools")
+    @classmethod
+    def _known_tools(cls, v: list[str]):
+        if unknown := [t for t in v if t not in TOOL_NAMES]:
+            raise ValueError(f"unknown tool(s) {unknown}; known: {', '.join(sorted(TOOL_NAMES))}")
+        return v
 
 
 class DeliberationSpec(BaseModel):
@@ -160,6 +187,19 @@ class Prompts(BaseModel):
         "continue, put one pointed question to each member who must defend or reconsider a position. "
         "Member ids: {ids}."
     )
+    research_task: str = (
+        "Research this idea for one board member, the {role}, whose concern is {focus}.\n\n## Idea\n{idea}\n\n"
+        "Find the evidence that bears on that concern: competitors and their pricing, market size and growth, "
+        "regulation, and precedents of similar products that succeeded or failed. Give up to {points} bullet "
+        "points, each a fact with its source URL, then a short list of what you could not find or verify. "
+        "No verdict and no advice: facts only. Make at most 5 tool calls."
+    )
+    research_expected: str = "A bullet list of sourced facts on the concern, each with its URL, then the open gaps."
+    research_points: int = 8
+    briefing_context: str = (  # prepended to a seat's hostile and coaching tasks when research ran
+        "## Research briefing prepared for you\n{briefing}\n\n"
+        "Use it: cite it where it supports your point and dispute it where it is thin or wrong.\n\n"
+    )
     revision_context: str = (
         "This is revision {n} of an idea this board has already reviewed. "
         "What the board said about the previous version:\n{previous}\n\n"
@@ -212,7 +252,8 @@ class BoardSpec(BaseModel):
     agents: list[AgentSpec] = Field(min_length=1)
     synthesizer: SynthesizerSpec = SynthesizerSpec()
     prompts: Prompts = Prompts()
-    phases: list[Phase] = list(ALL_PHASES)
+    phases: list[Phase] = list(DEFAULT_PHASES)
+    research: ResearchSpec = ResearchSpec()
     verdicts: bool = True  # critics end with a structured kill / pivot / proceed verdict
     tool_phases: list[Phase] = ["hostile"]  # phases in which seats may use their tools (cost control)
     deliberation: DeliberationSpec = DeliberationSpec()
@@ -280,6 +321,7 @@ class AgentOutput(BaseModel):
     text: str
     verdict: Verdict | None = None
     tool_calls: list[ToolCall] = []
+    sources: list[str] = []  # URLs the agent's tools actually returned (the grounding for its citations)
     model: str | None = None
     seconds: float | None = None
 
@@ -331,6 +373,7 @@ class RunRequest(BaseModel):
     phases: list[Phase] | None = None
     title: str | None = None
     refine: RefineSpec | None = None  # overrides the board's (and the project's)
+    research: bool = False  # add the research phase to the board's phases
 
     @model_validator(mode="after")
     def _idea_or_project(self):
