@@ -14,6 +14,54 @@ sharing one engine.
 
 Every board runs up to four phases (plus an optional research phase first, see [Agent tools](#agent-tools)):
 
+```mermaid
+flowchart TD
+    idea([Idea or brief]) --> R
+
+    subgraph R[Research phase, optional: one researcher per seat, in parallel]
+        direction LR
+        r1[Researcher<br/>for seat 1] ~~~ r2[Researcher<br/>for seat 2] ~~~ rn[Researcher<br/>for seat n]
+    end
+    R -- "one briefing per seat; claims checked<br/>against what the tools actually returned" --> H
+
+    subgraph H[Hostile round: every seat attacks from its own domain, in parallel]
+        direction LR
+        h1[Seat 1] ~~~ h2[Seat 2] ~~~ hn[Seat n]
+    end
+    H -- "verdict per seat: kill / pivot / proceed,<br/>score 0-10, blocking issues; the board tallies" --> U{Unanimous?}
+    U -- yes --> C
+    U -- no --> D
+
+    subgraph D[Deliberation: rounds until the debate settles]
+        direction TB
+        d1["Round n: each seat reads the others,<br/>rebuts or concedes, restates its verdict"] --> ch{"Chair: is another<br/>round worth it?"}
+        ch -- "yes: puts pointed questions<br/>to the seats that dodged" --> d1
+    end
+    ch -- "close, unanimity, or round limit" --> C
+
+    subgraph C[Coaching round: the same seats, now constructive]
+        direction LR
+        c1[Seat 1] ~~~ c2[Seat 2] ~~~ cn[Seat n]
+    end
+    C -- "fixes, given the critiques and<br/>where the debate landed" --> S["Synthesizer: refined pitch<br/>plus a self-contained revised brief"]
+
+    S --> G{"Refine loop: target score met,<br/>no improvement, or iteration limit?"}
+    G -- "not yet: the revision goes back; seats must say<br/>whether each earlier issue was actually fixed" --> H
+    G -- done --> OUT([Report: verdicts, debate digest,<br/>fixes, pitch, run metadata])
+
+    tools[("Tools and MCP servers<br/>web search, scrape, your own servers;<br/>per-seat call budget")] -.-> R
+    tools -.-> H
+    mem[("Project memory<br/>guidelines, voice, per-seat notes<br/>from earlier runs")] -.-> H
+    mem -.-> C
+```
+
+What makes this agentic rather than a prompt chain: each seat is its own agent with a role, a failure
+mode it hunts for, optional tools with a hard call budget, and memory of what it said last time; and the
+control flow is decided at run time, not in advance. The chair decides how many deliberation rounds
+happen and whom to press, the tally decides whether there is anything to debate at all, and the refine
+loop decides whether the board sits again. Two runs of the same board on the same idea can take
+different paths, and the report records which path was taken.
+
 1. **Hostile**: each agent tears the idea apart from its own domain and ends with a verdict.
 2. **Deliberation**: the critics read each other and rebut or concede, round after round. After each
    round a **chair** agent decides whether another round is worth it and puts pointed questions to the
@@ -405,10 +453,47 @@ Design notes:
 
 ## Roadmap
 
+Direction, set on 1 October 2026: from a board that critiques ideas toward a board that can be
+**grounded, honest about its uncertainty, and calibrated** for one recurring decision (an architecture
+review, a project intake, a pre-mortem), so that the same engine serves as an open demo and as the
+core of a tailored deployment. Boards and seats stay YAML in git; the engine stays MIT.
+
+Next, in this order:
+
+1. **Evaluation.** The board against a single well-prompted frontier model on 20 ideas, blind-judged.
+   The table goes in this README whatever it says. This decides whether the board pattern earns its cost.
+2. **Grounding, two kinds, both optional.** A `grounding:` list per seat naming the sources it may cite.
+   *Canon*: a curated local library (books, papers, industry reports) indexed on your machine; the
+   indexer and the reading list ship, the texts never do. *Company*: ADRs, standards, past decisions,
+   when they exist and are allowed. Both are MCP knowledge servers behind the same field. Canon gives a
+   seat authority; company gives it relevance; without either it is still a strong outside reviewer.
+3. **Uncertainty policy, instead of silence.** Every claim is labelled *grounded* (with citation),
+   *inferred* (with the reasoning) or *speculative*. Doubts become caveats on the verdict; missing
+   information becomes questions for the next round, which the refine loop carries forward. A seat only
+   declines when the brief gives it nothing to work with, and then it says what it needs.
+4. **Research providers.** Perplexity as an optional provider for the research seat (open-web questions,
+   slower and paid); the canon is consulted first, the web second.
+5. **Store.** SQLite for runs, events, citations, cost per run, calibration sets and scorecards, inside
+   the existing Docker image with zero operations; PostgreSQL later through the same layer. YAML remains
+   the source of truth for boards and seats.
+6. **Calibration.** A `calibration/` set per project: past decisions with their outcomes, blind runs of
+   the board, and a scorecard per seat (agreement with what was decided, false alarms, misses, and who
+   turned out right where they disagreed). The first set: anonymised past architecture decisions.
+7. **Seat library.** Templates with a specific failure mode, grounding slots and the uncertainty
+   policy already written: Integration-risk Architect, Run-cost Owner (FinOps), Regulatory Reviewer
+   (AI Act, NIS2), Change-fatigue Operations Lead, People Impact, Investor Relations, and more. A board
+   seats five to seven of them, composed per decision type; the templates are tailored and calibrated
+   per deployment.
+8. **Tracing and cost.** OpenTelemetry spans per seat and tool call; tokens and cost per run in the
+   report and the UI; a budget cap per run.
+9. **Guardrails.** Prompt-injection tests on the idea text and on tool output; schema validation of
+   every structured output.
+
+Later, unchanged from before:
+
 - **Web UI**: board YAML editor and validator, run comparison.
 - **Support agents**: a scribe (minutes and notes), a cross-checker (contradictions and unsupported
-  claims across agents), a deep researcher (grounded briefings via search and MCP knowledge bases) and
-  configurable synthesizers, supporting the main board members.
+  claims across agents) and configurable synthesizers, supporting the main board members.
 - **Structured output**: upload a JSON template and get schema-validated agent output.
 - **Report templates**: render the report into a user-supplied `.docx` (corporate template).
 - **Tool scripts**: opt-in user Python tools loaded from a local plugin directory, disabled by default and
