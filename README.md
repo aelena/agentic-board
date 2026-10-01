@@ -14,6 +14,12 @@ sharing one engine.
 
 Every board runs up to four phases (plus an optional research phase first, see [Agent tools](#agent-tools)):
 
+![One real run, replayed: two revisions of a kitchen-display idea in front of the startup board](docs/demo.gif)
+
+*Every line in the recording comes from a saved run (`runs/<id>/result.json`), rendered by
+[`tools/make_demo_gif.py`](tools/make_demo_gif.py); nothing is staged. This run was unanimous in both hostile
+rounds, so the chair never sat; a contested idea adds the deliberation rounds shown in the diagram below.*
+
 ```mermaid
 flowchart TD
     idea([Idea or brief]) --> R

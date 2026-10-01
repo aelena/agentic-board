@@ -19,8 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from idea_refiner.models import RunResult  # noqa: E402
 
-W, H = 1000, 600
-PAD, LINE = 22, 20
+W, H = 840, 504
+PAD, LINE = 18, 17
 FONT_CANDIDATES = [
     r"C:\Windows\Fonts\CascadiaMono.ttf",
     r"C:\Windows\Fonts\consola.ttf",
@@ -46,7 +46,7 @@ TITLES = {
 }
 
 
-def font(size: int = 15) -> ImageFont.FreeTypeFont:
+def font(size: int = 13) -> ImageFont.FreeTypeFont:
     for f in FONT_CANDIDATES:
         if Path(f).exists():
             return ImageFont.truetype(f, size)
@@ -63,9 +63,12 @@ class Terminal:
         self.font = font()
         self.rows = (H - 2 * PAD) // LINE
 
-    def say(self, text: str = "", colour=FG, hold: int = 350, wrap: int = 92) -> None:
+    def add(self, text: str = "", colour=FG, wrap: int = 92) -> None:
         for chunk in textwrap.wrap(text, wrap) or [""]:
             self.lines.append((chunk, colour))
+
+    def say(self, text: str = "", colour=FG, hold: int = 350, wrap: int = 92) -> None:
+        self.add(text, colour, wrap)
         self.snap(hold)
 
     def snap(self, hold: int) -> None:
@@ -79,11 +82,13 @@ class Terminal:
         self.frames.append(img)
         self.durations.append(hold)
 
-    def save(self, path: Path) -> None:
+    def save(self, path: Path, colours: int = 32) -> None:
         self.durations[-1] = 4000  # linger on the last frame
-        self.frames[0].save(
-            path, save_all=True, append_images=self.frames[1:], duration=self.durations, loop=0, optimize=True
-        )
+        # One shared palette for every frame: the image is eight flat colours plus antialiasing, and a
+        # per-frame adaptive palette costs megabytes for nothing.
+        palette = self.frames[-1].quantize(colors=colours, method=Image.Quantize.MEDIANCUT)
+        frames = [f.quantize(palette=palette, dither=Image.Dither.NONE) for f in self.frames]
+        frames[0].save(path, save_all=True, append_images=frames[1:], duration=self.durations, loop=0, optimize=True)
 
 
 def render(result: RunResult, out: Path) -> None:
@@ -102,21 +107,26 @@ def render(result: RunResult, out: Path) -> None:
             title = TITLES[p.phase] + (f", round {p.round}" if p.round else "")
             t.say(f"▶ {title}", MAGENTA, 600)
             if p.phase == "synthesis":
-                for line in (result.pitch or p.outputs[0].text).strip().split("\n"):
-                    if line.strip().startswith("## Revised idea"):
+                shown = 0
+                for line in p.outputs[0].text.strip().splitlines():
+                    low = line.strip().lower().lstrip("#").strip()
+                    if low.startswith(("revised idea", "still open")) or shown >= 7:
+                        t.say("  ...", DIM, 600)
                         break
                     if line.strip():
                         t.say("  " + line.strip(), GREEN, 420)
+                        shown += 1
                 continue
             for o in p.outputs:
                 if o.verdict:
                     v = o.verdict
                     conf = f", {v.confidence} confidence" if v.confidence else ""
-                    t.say(f"  {o.role:<30} {v.decision:<8} {v.score:>2}/10{conf}", COLOUR[v.decision], 420)
+                    t.add(f"  {o.role:<30} {v.decision:<8} {v.score:>2}/10{conf}", COLOUR[v.decision])
                     if v.issues:
-                        t.say(f"      issue: {v.issues[0]}", DIM, 260)
+                        t.add(f"      issue: {v.issues[0]}", DIM)
                     if v.questions:
-                        t.say(f"      asks:  {v.questions[0]}", DIM, 260)
+                        t.add(f"      asks:  {v.questions[0]}", DIM)
+                    t.snap(650)
                 else:
                     first = o.text.strip().split("\n")[0]
                     t.say(f"  {o.role:<30} {first[:70]}", FG, 380)
