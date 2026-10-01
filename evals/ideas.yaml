@@ -1,0 +1,166 @@
+# Twenty ideas for the board-versus-single-model evaluation. Deliberately mixed: B2B and consumer, software
+# and hardware-adjacent, strong and weak, so a judge cannot win by always saying "kill". Each is a brief as a
+# founder would actually write it, flaws included.
+ideas:
+  - id: legal-diff
+    title: Local legal document comparison
+    text: >
+      A two-pass legal document comparison system for mid-sized law firms. Pass one aligns clauses between two
+      contract versions with embeddings (Qdrant, running on-premises); pass two has an LLM explain each material
+      change in plain language. Everything runs locally for confidentiality. Pricing: €400 per seat per month.
+      Founders: two lawyers and one engineer. No customers yet; three firms have agreed to a pilot.
+
+  - id: fleet-battery
+    title: Battery health analytics for delivery fleets
+    text: >
+      SaaS that ingests telematics from electric delivery vans and predicts battery degradation per vehicle,
+      recommending charging schedules that extend pack life. Sold to fleet operators with 50 to 500 vans at €12
+      per van per month. Data access depends on OEM APIs, two of which are open and three closed. Team: one
+      battery scientist, one data engineer. One pilot with a 120-van regional courier, no revenue yet.
+
+  - id: grandparent-stories
+    title: Voice-recorded family memoir app
+    text: >
+      A mobile app that calls elderly relatives once a week, asks them a prepared question about their life,
+      records and transcribes the answer, and assembles a printed book after a year. Sold to the adult children
+      at €15 per month plus the book. Uses a telephony API and an LLM for questions and transcription cleanup.
+      Solo founder, former product manager. 60 people on a waiting list.
+
+  - id: port-crane-kpi
+    title: Port crane KPI platform
+    text: >
+      An analytics platform for container terminals that computes crane productivity KPIs (moves per hour,
+      idle causes, shift comparisons) from existing terminal operating system logs, with Elasticsearch
+      dashboards and weekly PDF reports. Sold per terminal at €60,000 per year. Founder spent 15 years in port
+      operations. First terminal signed as design partner, paying €20,000 for the pilot.
+
+  - id: ai-tutor-math
+    title: Adaptive maths tutor for 10 to 14 year olds
+    text: >
+      A web app where an LLM tutor walks pupils through maths problems step by step, adapts difficulty, and
+      sends parents a weekly report. Consumer subscription at €9 per month, plus school licences. Content
+      aligned to the Spanish curriculum first. Team of three, one teacher. Concern: hallucinated maths and
+      children's data. 300 beta users from one school, 40 percent weekly retention after six weeks.
+
+  - id: compliance-copilot
+    title: EU AI Act compliance copilot for SMEs
+    text: >
+      A questionnaire-driven tool that classifies a company's AI systems by AI Act risk tier, lists the
+      applicable obligations, and generates the technical documentation templates. Rule-based with citations,
+      optional LLM for narrative. €200 per month per company, plus a paid readiness assessment delivered by
+      the founders. Two founders, one with an audit background. No product yet; a 40-question prototype in a
+      spreadsheet that six companies have filled in.
+
+  - id: vertical-farm-os
+    title: Operating system for container farms
+    text: >
+      Control and optimisation software for shipping-container vertical farms: nutrient dosing, lighting
+      schedules and yield forecasting with reinforcement learning. Sold to farm operators as a €1,500 monthly
+      subscription per container, hardware agnostic via Modbus and MQTT. Team: two agronomists and a controls
+      engineer. One operator with four containers has run the software for three months with a 9 percent yield
+      increase versus their previous season.
+
+  - id: freelancer-tax
+    title: Autonomous tax filing for Spanish freelancers
+    text: >
+      A service that connects to a freelancer's bank and invoicing tool, categorises transactions with an LLM,
+      and files quarterly VAT and income tax returns automatically, with a human accountant reviewing
+      exceptions. €29 per month. Regulated activity, so filings go through a partner gestoría. Team of four
+      including one accountant. 1,200 users, €28,000 monthly recurring revenue, 6 percent monthly churn.
+
+  - id: mesh-sensors-vineyard
+    title: Frost prediction for vineyards
+    text: >
+      LoRa temperature and humidity sensors across a vineyard feeding a model that predicts frost pockets
+      hours ahead and triggers wind machines or sprinklers. Hardware sold at cost (€120 per node), €2 per
+      hectare per month for the service. Founder is a winemaker's son with an engineering degree. 11 vineyards
+      in La Rioja equipped, two prevented frost losses last spring and said so publicly.
+
+  - id: meeting-zero-retention
+    title: Zero-retention meeting notes
+    text: >
+      A meeting transcription and summary tool whose selling point is that audio and transcripts are deleted
+      the moment the summary is delivered, with the pipeline running on the customer's own cloud account.
+      Whisper plus an open-weights summariser. €8 per user per month, aimed at law, healthcare and HR teams.
+      Solo technical founder. 25 paying teams after a Product Hunt launch, growth flat for two months.
+
+  - id: boardroom-agents
+    title: Agentic boardroom for decisions
+    text: >
+      Software that convenes a board of AI personas (investor, CTO, counsel, security, product) to critique
+      a business idea in a hostile round, deliberate, coach, and produce a refined pitch. Configurable in YAML,
+      works with local models. Open-source core; revenue from tailoring boards to a company's own documents and
+      decisions. Solo founder, former CTO. Repo public with no users yet; the founder plans to sell four-week
+      pilots at €15,000.
+
+  - id: sneaker-authentication
+    title: Sneaker authentication by phone camera
+    text: >
+      An app that authenticates second-hand sneakers from six phone photos using a vision model trained on
+      a dataset of 200,000 labelled pairs licensed from a resale platform. €3 per check, or free inside partner
+      marketplaces who pay per volume. Team of three, one ex-resale-platform. Accuracy 97 percent on the test
+      set; counterfeiters adapt quickly. 15,000 checks in the first quarter through one marketplace.
+
+  - id: hospital-bed-flow
+    title: Hospital bed flow prediction
+    text: >
+      Predicts discharges and admissions 48 hours ahead per ward from the hospital information system, so bed
+      managers can plan. Sold to hospital groups; procurement cycles of 12 to 18 months. Needs integration with
+      three major HIS vendors. Team: one physician, two data scientists, a sales lead from medical devices.
+      One hospital pilot with 14 percent reduction in emergency boarding time, unpublished.
+
+  - id: creator-contract-bot
+    title: Contract negotiation assistant for creators
+    text: >
+      A browser extension that reads brand deal contracts sent to influencers, flags unusual clauses
+      (exclusivity, perpetual rights, payment terms), and suggests counter-wording, with a lawyer marketplace
+      for escalation. Freemium; €19 per month pro. Two founders from a talent agency. 4,000 installs, 180 pro
+      subscribers, most churn after one deal.
+
+  - id: industrial-rag
+    title: Maintenance manual assistant for factories
+    text: >
+      A retrieval-augmented assistant that answers technicians' questions from maintenance manuals, work
+      orders and sensor history, on tablets on the factory floor, with citations to the manual page. On-premises
+      deployment, €4,000 per site per month. Team of five from industrial automation. Two sites live at a
+      packaging manufacturer; technicians use it 30 times a day per site.
+
+  - id: micro-pension
+    title: Micro-pension for gig workers
+    text: >
+      A fintech that rounds up gig workers' earnings and invests the difference in a low-cost pension product,
+      with employer-matching schemes negotiated with delivery platforms. Revenue from a 0.4 percent fee on
+      assets. Regulated: requires a licensed pension provider as partner, which the team has signed. Team of
+      six with two ex-bank. €2.1 million assets under management after a year, 9,000 savers, average €230 each.
+
+  - id: kitchen-display-ai
+    title: Kitchen display with demand forecasting
+    text: >
+      A kitchen display system for independent restaurants that also forecasts next-hour order volume from
+      the POS feed and local events, telling the kitchen what to prep. €79 per month per restaurant, hardware
+      is any tablet. Two founders, one a former chef. 60 restaurants paying, €4,700 monthly recurring revenue,
+      competing with three well-funded KDS vendors who could add forecasting in a quarter.
+
+  - id: open-source-licensing-scanner
+    title: Licence governance for AI-generated code
+    text: >
+      A CI tool that scans pull requests for code that matches open-source snippets with incompatible
+      licences, flags AI-assistant-generated blocks, and produces an SBOM with licence provenance. Per-repo
+      pricing at €15 per month, free for open source. Solo founder, ex-platform-engineer. Works on GitHub only.
+      800 free repos, 22 paying, no sales process.
+
+  - id: eldercare-robot-rental
+    title: Companion robot rental for care homes
+    text: >
+      Rents tabletop companion robots to care homes, with software that runs reminiscence sessions, medication
+      reminders and video calls with family, at €240 per robot per month. Hardware from a Japanese OEM with
+      18-month lead times. Team of four, one geriatric nurse. Two care homes with ten robots each; staff report
+      calmer evenings, families love it, the home's finance director asked for outcome data before renewing.
+
+  - id: devrel-analytics
+    title: Developer relations analytics
+    text: >
+      Aggregates GitHub, Discord, Stack Overflow and docs analytics into one view of developer community
+      health, with attribution from community activity to signups. Sold to developer tool companies at €500
+      to €3,000 per month. Three founders from DevRel roles. 12 paying customers, €14,000 monthly recurring
+      revenue, two churned when a large competitor launched a similar free tier.
