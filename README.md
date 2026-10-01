@@ -542,6 +542,7 @@ npm run dev                              # dev server on :5173 proxying /api to 
 ## Development
 
 ```bash
+pip install -e ".[dev,tools]"   # the tool and research tests need crewai-tools
 pytest -q            # no network: the engine takes an injectable executor
 ruff check . && ruff format .
 ```

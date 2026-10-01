@@ -24,7 +24,9 @@ def canon(tmp_path) -> Path:
     (d / "ddia" / "ch09.md").write_text(
         "# Consistency and consensus\n\nLinearizability makes a system appear as if there were only one copy "
         "of the data.\n\nThe cost of linearizability is availability: during a network partition a linearizable "
-        "system must refuse some requests. This is the CAP trade-off in practice.\n\n" + "Unrelated filler about other matters. " * 60,
+        "system must refuse some requests. This is the CAP trade-off in practice.\n\n"
+        + "Unrelated filler about other matters. "
+        * 60,
         encoding="utf-8",
     )
     (d / "microservices.txt").write_text(
