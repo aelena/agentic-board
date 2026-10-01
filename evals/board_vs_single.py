@@ -186,6 +186,11 @@ def run(args) -> Path:
     rows = []
     for n, idea in enumerate(ideas, 1):
         text = idea["text"].strip()
+        done = out_dir / f"{idea['id']}.json"
+        if args.resume and done.is_file():
+            rows.append(json.loads(done.read_text(encoding="utf-8")))
+            print(f"[{n}/{len(ideas)}] {idea['id']}: already judged, kept")
+            continue
         print(f"[{n}/{len(ideas)}] {idea['id']}: board...", end=" ", flush=True)
         t0 = time.perf_counter()
         result = run_board(board, text, request_llm=spec, settings=settings, execute=execute, title=idea["title"])
@@ -308,6 +313,7 @@ def main(argv: list[str] | None = None) -> Path:
     p.add_argument("--out", default=None, help="results directory (default: evals/results/<timestamp>)")
     p.add_argument("--dry", action="store_true", help="fakes instead of LLM calls: exercises the harness")
     p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--resume", action="store_true", help="keep ideas already judged in --out; run only the rest")
     args = p.parse_args(argv)
     if args.seed is not None:
         random.seed(args.seed)
