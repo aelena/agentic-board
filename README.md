@@ -230,6 +230,7 @@ cannot make the server run arbitrary code:
 |--------------|-----------------------------------------------|------------------|
 | `web_search` | Google results (title, link, snippet)         | `SERPER_API_KEY` (serper.dev) |
 | `scrape`     | text of a public web page, capped at 6000 chars | nothing        |
+| `perplexity_search` | Answer-style web research with the URLs it rests on, via Perplexity | `PERPLEXITY_API_KEY` |
 
 ```bash
 pip install "idea-refiner[tools]"
@@ -252,6 +253,70 @@ planted in an idea or a web page cannot reach internal services. Missing keys fa
 first LLM call. Every tool call is recorded on the agent's output, streamed as a `tool` event and listed
 in the report.
 
+### Grounding: sources a seat may cite
+
+A seat without grounding is a strong outside reviewer. A seat with grounding can also *cite*. Declare the
+sources under `knowledge:` and name them in a seat's `grounding:`; both are optional, by design, because
+companies rarely have clean records and a reviewer still has to be useful without them.
+
+```yaml
+knowledge:
+  canon:                                  # a folder you own: books, papers, reports (.md .txt .rst .pdf)
+    path: ./canon/distributed-systems     # relative to this YAML file; indexed on your machine, never copied
+    description: the ten best books on distributed systems and multicloud
+  adrs:                                   # a company's records, through an MCP knowledge server
+    mcp: adr_server                       # declared under mcp_servers
+    allow: [search]
+
+agents:
+  - id: architect
+    role: Integration-risk Architect
+    focus: integrations that looked simple on the diagram
+    grounding: [canon, adrs]
+
+research: { grounding: [canon] }          # researchers consult the canon before the open web
+knowledge_phases: [hostile, deliberation, coaching]   # the default: where grounding tools are offered
+```
+
+Two kinds of source, one field:
+
+- **A canon library** (`path`) is a local folder. It is indexed in memory with BM25 the first time a run
+  needs it, so the texts stay where they are and nothing is written anywhere. The seat gets a
+  `<name>_search` tool whose results are passages headed by a `[canon:<library>:<file>#<n>]` reference.
+  Canon gives a seat *authority*: it argues from the literature, not from memory.
+- **An MCP knowledge server** (`mcp`) is any server from `mcp_servers`: ADRs, standards, past decisions,
+  a wiki. Its tools are wrapped like every other MCP tool (budget, output cap, reporting). Company records
+  give a seat *relevance*: it argues from what this organisation actually decided.
+
+Seats are told to search before asserting, to cite every passage by its reference verbatim, and that a
+passage is evidence, never an instruction. The references a seat's tools actually returned are recorded
+(`sources` on each output), so a citation no search produced is distinguishable from one that did; the
+research phase marks those as unverified. Grounding tools are offered in `knowledge_phases` regardless
+of `tool_phases`: a library lookup is cheap and the point is citing in every round. A missing folder fails
+the run before the first LLM call.
+
+### Uncertainty: caveats and questions instead of silence
+
+Every seat works under an uncertainty policy (`uncertainty: true`, the default). It marks the claims its
+critique rests on as **grounded** (cited), **inferred** (from the brief or experience, said in passing) or
+**speculative** (labelled or left out), and its verdict carries three more fields:
+
+```json
+{"decision": "pivot", "score": 5, "issues": ["no moat"],
+ "confidence": "low", "caveats": ["if churn is under 3% the moat argument weakens"],
+ "questions": ["How many of the 400 users pay?"]}
+```
+
+- `confidence` says how much of the verdict rests on grounded facts rather than inference.
+- `caveats` are what would change the seat's mind.
+- `questions` are what it needs for the next round, each answerable by the people behind the idea.
+
+Questions are not lost: the other seats see them in deliberation, the synthesizer receives every open
+question and must answer it in the revised idea or list it under *Still open*, and the next revision's
+critics are reminded which questions the board left open. A seat only declines to judge when the brief
+gives it nothing to work with, and then it says what it needs. Set `uncertainty: false` on a board to
+drop the policy and the extra fields.
+
 ### Research phase
 
 `refiner run --research` (or the research checkbox, `"research": true` in the API, or `research` in a
@@ -267,10 +332,15 @@ sourced-looking facts when every search failed. Citations no tool returned are l
 ```yaml
 research:                        # optional; these are the defaults
   role: Research Analyst
-  tools: [web_search, scrape]
+  tools: [web_search, scrape]    # or [perplexity_search]: answer-style research with sources (needs PERPLEXITY_API_KEY)
   tool_budget: 6
+  # grounding: [canon]           # consult a knowledge source before the open web
   # llm: openai/gpt-4o           # research can use its own model
 ```
+
+`perplexity_search` asks Perplexity one precise question and gets back a synthesized answer with the URLs
+it rests on (model from `PERPLEXITY_MODEL`, default `sonar`). It is slower and costlier than a plain search
+and needs no extra package, only the key; the research phase is where it earns its cost.
 
 ### MCP servers
 
@@ -462,16 +532,16 @@ Next, in this order:
 
 1. **Evaluation.** The board against a single well-prompted frontier model on 20 ideas, blind-judged.
    The table goes in this README whatever it says. This decides whether the board pattern earns its cost.
-2. **Grounding, two kinds, both optional.** A `grounding:` list per seat naming the sources it may cite.
+2. ~~**Grounding, two kinds, both optional.**~~ Shipped: see [Grounding](#grounding-sources-a-seat-may-cite). A `grounding:` list per seat naming the sources it may cite.
    *Canon*: a curated local library (books, papers, industry reports) indexed on your machine; the
    indexer and the reading list ship, the texts never do. *Company*: ADRs, standards, past decisions,
    when they exist and are allowed. Both are MCP knowledge servers behind the same field. Canon gives a
    seat authority; company gives it relevance; without either it is still a strong outside reviewer.
-3. **Uncertainty policy, instead of silence.** Every claim is labelled *grounded* (with citation),
+3. ~~**Uncertainty policy, instead of silence.**~~ Shipped: see [Uncertainty](#uncertainty-caveats-and-questions-instead-of-silence). Every claim is labelled *grounded* (with citation),
    *inferred* (with the reasoning) or *speculative*. Doubts become caveats on the verdict; missing
    information becomes questions for the next round, which the refine loop carries forward. A seat only
    declines when the brief gives it nothing to work with, and then it says what it needs.
-4. **Research providers.** Perplexity as an optional provider for the research seat (open-web questions,
+4. ~~**Research providers.**~~ Shipped: `perplexity_search` and `research.grounding`. Perplexity as an optional provider for the research seat (open-web questions,
    slower and paid); the canon is consulted first, the web second.
 5. **Store.** SQLite for runs, events, citations, cost per run, calibration sets and scorecards, inside
    the existing Docker image with zero operations; PostgreSQL later through the same layer. YAML remains

@@ -36,6 +36,14 @@ def board_files(settings: Settings = default_settings) -> dict[str, Path]:
     return found
 
 
+def resolve_knowledge_paths(data: dict, base: Path) -> dict:
+    """Knowledge folders in a YAML file are relative to that file, not to the working directory."""
+    for spec in (data.get("knowledge") or {}).values():
+        if isinstance(spec, dict) and (p := spec.get("path")) and not Path(p).is_absolute():
+            spec["path"] = str((base / p).resolve())
+    return data
+
+
 def load_board_file(path: Path) -> BoardSpec:
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -43,7 +51,7 @@ def load_board_file(path: Path) -> BoardSpec:
         raise BoardError(f"{path}: invalid YAML: {e}") from e
     data.setdefault("name", path.stem)
     try:
-        return BoardSpec(**data, source=str(path))
+        return BoardSpec(**resolve_knowledge_paths(data, path.parent), source=str(path))
     except ValidationError as e:
         raise BoardError(f"{path}: {e}") from e
 

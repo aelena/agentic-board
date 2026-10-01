@@ -15,6 +15,15 @@ from pydantic import ValidationError
 
 from .models import DECISIONS, AgentOutput, Tally, Verdict
 
+_CONFIDENCE = ("low", "medium", "high")
+
+
+def _strings(value, limit: int = 3) -> list[str]:
+    if isinstance(value, str):
+        value = [value]
+    return [str(i).strip() for i in (value or []) if str(i).strip()][:limit]
+
+
 _FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S | re.I)
 
 
@@ -46,16 +55,28 @@ def parse_verdict(text: str) -> tuple[str, Verdict | None]:
     if obj is None:
         return prose, None
     try:
-        issues = obj.get("issues") or []
-        if isinstance(issues, str):
-            issues = [issues]
+        conf = str(obj.get("confidence") or "").strip().lower()
         return prose, Verdict(
             decision=str(obj.get("decision", "")).strip().lower(),
             score=max(0, min(10, round(float(obj.get("score"))))),
-            issues=[str(i).strip() for i in issues if str(i).strip()][:3],
+            issues=_strings(obj.get("issues")),
+            confidence=conf if conf in _CONFIDENCE else None,
+            caveats=_strings(obj.get("caveats")),
+            questions=_strings(obj.get("questions")),
         )
     except (TypeError, ValueError, ValidationError):
         return prose, None
+
+
+def open_questions(outputs: list[AgentOutput]) -> list[str]:
+    """Every question the seats left for the next round, attributed, in board order, without duplicates."""
+    out, seen = [], set()
+    for o in outputs:
+        for q in o.verdict.questions if o.verdict else []:
+            if (key := q.lower().rstrip("?. ")) not in seen:
+                seen.add(key)
+                out.append(f"{o.role}: {q}")
+    return out
 
 
 def tally(outputs: list[AgentOutput]) -> Tally:

@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from . import tools
+from . import knowledge, tools
 from .config import PROVIDERS, Settings
 from .config import settings as default_settings
 from .llm import LlmSpec, build_llm, describe, resolve
@@ -42,7 +42,7 @@ from .models import (
     Tally,
     ToolCall,
 )
-from .verdicts import extract_json, parse_verdict, tally
+from .verdicts import extract_json, open_questions, parse_verdict, tally
 
 if TYPE_CHECKING:
     from crewai import Agent, Task
@@ -102,6 +102,8 @@ class Job:
     tools: list[str] = field(default_factory=list)  # tool names, see idea_refiner.tools
     tool_budget: int = 4  # hard cap on tool calls for this job
     mcp: list[McpRef] = field(default_factory=list)  # MCP servers (and allowed tools) for this job
+    grounding: list[str] = field(default_factory=list)  # knowledge sources (board.knowledge) for this job
+    policy: bool = False  # append the uncertainty policy (seats, not the chair or the synthesizer)
 
 
 @dataclass
@@ -129,6 +131,23 @@ class Ctx:
                 self._mcp[ref.server] = tools.resolve_mcp(self.board.mcp_servers[ref.server])
         found = self._mcp[ref.server]
         return found if ref.allow is None else [t for t in found if tools.mcp_tool_name(t) in ref.allow]
+
+    def knowledge_tools(self, name: str) -> list[tuple[str, object]]:
+        """(display name, tool) pairs for one knowledge source: a search tool over a canon library, or the
+        tools of an MCP knowledge server. Libraries are indexed once per process."""
+        spec = self.board.knowledge[name]
+        if spec.path:
+            lib = knowledge.library(name, spec.path)
+            return [(f"{name}_search", knowledge.search_tool(name, lib, spec.description))]
+        ref = McpRef(server=spec.mcp, allow=spec.allow)
+        return [(tools.mcp_display_name(name, t), t) for t in self.mcp_tools(ref)]
+
+    def sources_text(self, names: list[str]) -> str:
+        parts = []
+        for n in names:
+            k = self.board.knowledge[n]
+            parts.append(f"'{n}'" + (f" ({k.description})" if k.description else ""))
+        return ", ".join(parts)
 
     def preamble(self, seat: str) -> str:
         """Project brief plus the seat's own notes from earlier runs, in front of every task."""
@@ -175,6 +194,13 @@ def run_jobs(ctx: Ctx, phase: Phase, jobs: list[Job], round_: int | None = None)
                 err = f"MCP server '{ref.server}' unavailable: {type(e).__name__}: {str(e)[:200]}"
                 data = {"status": "error", "tool": f"mcp:{ref.server}", "args": "", "error": err}
                 ctx.event("tool", phase=phase, round=round_, agent_id=j.seat, role=j.role, text=err, data=data)
+        for name in j.grounding:
+            try:
+                native += ctx.knowledge_tools(name)
+            except Exception as e:  # noqa: BLE001 - an unreachable source costs the seat a tool, not the run
+                err = f"knowledge source '{name}' unavailable: {type(e).__name__}: {str(e)[:200]}"
+                data = {"status": "error", "tool": f"knowledge:{name}", "args": "", "error": err}
+                ctx.event("tool", phase=phase, round=round_, agent_id=j.seat, role=j.role, text=err, data=data)
         if j.tools or native:
             extra["tools"] = tools.build(j.tools, j.tool_budget, native)
         agent = Agent(
@@ -187,9 +213,13 @@ def run_jobs(ctx: Ctx, phase: Phase, jobs: list[Job], round_: int | None = None)
             **extra,
         )
         description, expected = ctx.preamble(j.seat) + j.description, j.expected
-        if "tools" in extra:
+        if j.grounding:
+            description += "\n\n" + t.grounding_guidance.format(sources=ctx.sources_text(j.grounding))
+        if j.tools or j.mcp:
             names = j.tools + [f"mcp:{r.server}" for r in j.mcp]
             description += "\n\n" + t.tool_guidance.format(tools=", ".join(names))
+        if j.policy:
+            description += "\n\n" + t.uncertainty_policy
         if j.verdict:
             description += "\n\n" + t.verdict_format
             expected += " It ends with the fenced JSON verdict block."
@@ -245,6 +275,7 @@ def _tool_reporter(ctx: Ctx, phase: Phase, round_: int | None, j: Job, calls: li
             call.empty = not out.strip() or out.startswith(_NO_RESULT) or " is unavailable (" in out[:200]
             if not call.empty:
                 sources.update(tools.urls_in(out))
+                sources.update(knowledge.refs_in(out))
                 if isinstance(e.tool_args, dict) and (url := e.tool_args.get("website_url")):
                     sources.add(str(url))
         else:
@@ -263,6 +294,7 @@ def seat_job(
     p, t = a.persona(mode), ctx.board.prompts
     in_tool_phase = (phase or mode) in ctx.board.tool_phases
     seat_tools, seat_mcp = (a.tools, a.mcp) if in_tool_phase else ([], [])
+    seat_grounding = a.grounding if (phase or mode) in ctx.board.knowledge_phases else []
     role, focus = p.role or a.role, p.focus or a.focus
     fmt = dict(role=role, focus=focus, tone=t.hostile_tone if mode == "hostile" else t.coaching_tone)
     return Job(
@@ -273,11 +305,13 @@ def seat_job(
         description=description,
         expected=t.expected_output.format(sentences=t.sentences),
         llm=a.llm,
-        max_iter=a.max_iter or (8 if seat_tools or seat_mcp else 3),
+        max_iter=a.max_iter or (8 if seat_tools or seat_mcp or seat_grounding else 3),
         tool_budget=a.tool_budget,
         verdict=verdict,
         tools=list(seat_tools),
         mcp=list(seat_mcp),
+        grounding=list(seat_grounding),
+        policy=ctx.board.uncertainty,
     )
 
 
@@ -329,6 +363,7 @@ def run_research(ctx: Ctx, idea: str) -> PhaseResult:
             tools=list(r.tools),
             tool_budget=r.tool_budget,
             mcp=list(r.mcp),
+            grounding=list(r.grounding),
         )
         for a in ctx.board.agents
     ]
@@ -349,13 +384,15 @@ def ground(o: AgentOutput) -> str:
     no tool returned are listed as unverified."""
     if not any(not c.error and not c.empty for c in o.tool_calls):
         errors = [c.error for c in o.tool_calls if c.error]
+        if o.tool_calls and not errors and knowledge.refs_in(o.text):
+            return o.text  # library lookups that found nothing are not failures; keep what was written
         why = f" (last error: {errors[-1][:160]})" if errors else ""
         return (
             f"Research unavailable: no tool call returned results{why}. The researcher's draft was discarded "
             "because nothing in it could be verified. Rely on your own judgement and say where facts are missing."
         )
     known = {_norm(u) for u in o.sources}
-    cited = sorted(tools.urls_in(o.text))
+    cited = sorted(tools.urls_in(o.text) | knowledge.refs_in(o.text))
     unverified = [u for u in cited if not any(_norm(u) == k or _norm(u).startswith(k + "/") for k in known)]
     if not unverified:
         return o.text
@@ -475,8 +512,10 @@ def run_synthesis(
     standing: str,
     deliberation: str = "(none)",
     brief: bool = False,
+    questions: list[str] | None = None,
 ) -> PhaseResult:
     t, s = ctx.board.prompts, ctx.board.synthesizer
+    asked = t.synthesis_questions.format(questions="\n".join(f"- {q}" for q in questions)) if questions else ""
     job = Job(
         seat="synthesizer",
         role=s.role,
@@ -490,6 +529,7 @@ def run_synthesis(
             verdict=standing,
             sentences=t.synthesis_sentences,
         )
+        + asked
         + (f"\n\n{t.revision_brief}" if brief else ""),
         expected=t.synthesis_expected,
         llm=s.llm,
@@ -504,6 +544,9 @@ def _previous_view(prev: IterationSummary, phases: list[PhaseResult]) -> str:
     for o in last.outputs if last else []:
         if o.verdict:
             lines.append(f"- {o.role} ({o.verdict.decision}, {o.verdict.score}/10): {'; '.join(o.verdict.issues)}")
+    if last and (asked := open_questions(last.outputs)):
+        lines.append("Questions the board left open:")
+        lines += [f"- {q}" for q in asked]
     return "\n".join(lines)
 
 
@@ -556,7 +599,9 @@ def _improve(
     if "synthesis" not in wanted:
         return None
     standing = verdict.as_text() if verdict else "(none)"
-    synthesis = run_synthesis(ctx, idea, hostile, coaching, standing, digest, brief)
+    judged = rounds[-1] if rounds else hostile
+    asked = open_questions(judged.outputs) if judged else []
+    synthesis = run_synthesis(ctx, idea, hostile, coaching, standing, digest, brief, asked)
     result.phases.append(synthesis)
     return synthesis.outputs[0].text
 
@@ -598,6 +643,15 @@ def run_board(
     for name in sorted(servers):
         spec = board.mcp_servers[name]
         problems += tools.mcp_problems(name, spec, bool(board.source), settings.allow_mcp_commands)
+    grounded = {g for a in board.agents for g in a.grounding if set(board.knowledge_phases) & set(wanted)}
+    grounded |= set(board.research.grounding) if "research" in wanted else set()
+    for name in sorted(grounded):
+        k = board.knowledge[name]
+        problems += knowledge.problems(name, k, board.mcp_servers)
+        if k.mcp and k.mcp not in servers:
+            problems += tools.mcp_problems(
+                k.mcp, board.mcp_servers[k.mcp], bool(board.source), settings.allow_mcp_commands
+            )
     if problems:
         raise RunError("; ".join(problems))
     refine = refine or board.refine

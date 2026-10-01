@@ -39,6 +39,7 @@ class ToolDef:
     description: str
     env: tuple[str, ...]
     factory: Callable[[], Any]  # -> crewai BaseTool, imported lazily
+    needs_extra: bool = True  # implemented by crewai-tools (the ``tools`` extra), not by this package
 
 
 def _serper():
@@ -53,6 +54,65 @@ def _scrape():
     return ScrapeWebsiteTool()
 
 
+PERPLEXITY_URL = "https://api.perplexity.ai/chat/completions"
+PERPLEXITY_MODEL = os.environ.get("PERPLEXITY_MODEL", "sonar")
+
+
+def perplexity_answer(query: str, *, timeout: float = 60.0) -> str:
+    """One answer-style web research call. The reply is the answer followed by the URLs it rests on, so the
+    seat can cite them and ``ground`` can check them."""
+    import httpx
+
+    body = {
+        "model": PERPLEXITY_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": "Answer with verifiable facts and figures, each attributable to a source. "
+                "Say plainly what you could not find.",
+            },
+            {"role": "user", "content": query},
+        ],
+    }
+    headers = {"Authorization": f"Bearer {os.environ['PERPLEXITY_API_KEY']}", "Content-Type": "application/json"}
+    with httpx.Client(timeout=timeout) as http:
+        r = http.post(PERPLEXITY_URL, json=body, headers=headers)
+    r.raise_for_status()
+    data = r.json()
+    answer = (data.get("choices") or [{}])[0].get("message", {}).get("content", "").strip()
+    urls: list[str] = []
+    for c in data.get("citations") or []:
+        if isinstance(c, str) and c not in urls:
+            urls.append(c)
+    for s in data.get("search_results") or []:
+        if isinstance(s, dict) and (u := s.get("url")) and u not in urls:
+            urls.append(u)
+    if not answer:
+        return ""
+    return answer + ("\n\nSources:\n" + "\n".join(f"- {u}" for u in urls) if urls else "\n\n(no sources returned)")
+
+
+def _perplexity():
+    from crewai.tools import BaseTool
+    from pydantic import BaseModel, Field
+
+    class Args(BaseModel):
+        query: str = Field(description="A specific research question, in one sentence")
+
+    class Perplexity(BaseTool):
+        name: str = "perplexity_search"
+        description: str = (
+            "Answer-style web research via Perplexity: a synthesized answer with the URLs it rests on. "
+            "Slower and costlier than a plain search; ask one precise question at a time."
+        )
+        args_schema: type[BaseModel] = Args
+
+        def _run(self, query: str) -> str:
+            return perplexity_answer(query)
+
+    return Perplexity()
+
+
 REGISTRY: dict[str, ToolDef] = {
     t.name: t
     for t in (
@@ -60,6 +120,13 @@ REGISTRY: dict[str, ToolDef] = {
             "web_search", "Google search results (title, link, snippet) via serper.dev", ("SERPER_API_KEY",), _serper
         ),
         ToolDef("scrape", "Read the text of a public web page", (), _scrape),
+        ToolDef(
+            "perplexity_search",
+            "Answer-style web research with sources via Perplexity (model: PERPLEXITY_MODEL, default sonar)",
+            ("PERPLEXITY_API_KEY",),
+            _perplexity,
+            needs_extra=False,
+        ),
     )
 }
 TOOL_NAMES = frozenset(REGISTRY)
@@ -76,7 +143,7 @@ def installed() -> bool:
 def missing(names: list[str]) -> list[str]:
     """Why these tools cannot run here, one line per problem; empty when they all can."""
     problems = [f"unknown tool '{n}' (known: {', '.join(sorted(REGISTRY))})" for n in names if n not in REGISTRY]
-    if names and not installed():
+    if any(REGISTRY[n].needs_extra for n in names if n in REGISTRY) and not installed():
         problems.append('agent tools need the tools extra: pip install "idea-refiner[tools]"')
     for n in sorted({n for n in names if n in REGISTRY}):
         problems += [
