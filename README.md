@@ -99,6 +99,50 @@ The built-in `startup` board is the original one: Hardened VC, Scaling CTO, Prod
 Counsel, CISO / Grey-Hat Hacker, and a Founder who synthesises. The `architecture` board reviews a
 technical design (SRE, AppSec, Data, FinOps, Platform, Lead Architect).
 
+## Evaluation: does a board beat one well-prompted model?
+
+The question this project has to answer before it deserves its cost. On 1 October 2026 the `startup`
+board (five seats, hostile round, chaired deliberation, coaching, synthesis) ran against **one call of the
+same model** given everything the seats get (the five roles, the verdict format, the uncertainty policy) over
+the twenty ideas in [`evals/ideas.yaml`](evals/ideas.yaml). A different model judged both reviews blind, scored
+five criteria, and named a winner, **twice per idea with the order swapped**. Model under test `gpt-4o`,
+judge `gpt-4.1`. Harness: [`evals/board_vs_single.py`](evals/board_vs_single.py); full results, per-idea
+reviews and judgements in [`evals/results/2026-10-01-gpt4o-vs-board/`](evals/results/2026-10-01-gpt4o-vs-board/).
+
+**Board wins 13 of 20, single model wins 0, split decisions 7.**
+
+| criterion (1-10, mean of 40 judgements) | board | single call |
+|---|---|---|
+| specificity | 8.9 | 7.8 |
+| coverage of distinct risks | 9.7 | 8.8 |
+| actionability | 9.1 | 8.0 |
+| honesty (calibration, caveats, no invented facts) | 9.8 | 8.9 |
+| overall | 9.6 | 8.4 |
+| mean wall time | 28 s | 15 s |
+| mean output (approx. tokens) | 3,300 | 2,200 |
+| LLM calls | 12 | 1 |
+
+What the table does and does not say, read honestly:
+
+- **The judge is position-biased.** Every one of the seven splits has the same shape: the judge preferred
+  whichever review it read first. That is why each idea is judged twice. The board won 13 ideas *from both
+  positions*; the single call never won from second position. A single judgement per idea would have
+  overstated the board's margin.
+- **The margin is about one point on a ten-point scale,** not a different league. Coverage and honesty gain
+  most, which is what five separate contexts and an explicit uncertainty policy should buy. Specificity gains
+  least: the seats see the same brief the lone model sees.
+- **The cost is real:** roughly twice the wall time and 1.5x the output tokens, for 12 calls instead of 1.
+  Most hostile rounds were unanimous, so deliberation was skipped and the board ran in under 20 seconds on
+  half the ideas; a contested idea with two deliberation rounds costs three times that.
+- **One model family judged another from the same vendor.** A second run with a judge from a different
+  vendor, and with a stronger single-call baseline (a reasoning model), is the obvious next experiment; the
+  harness takes `--model` and `--judge-model`.
+
+The abandonment criterion of this project says to stop if the board pattern is no better than a single
+well-prompted model. On this evidence it is better, by a margin that is consistent but not dramatic, at about
+twice the cost. The board earns its place for decisions where coverage and calibrated doubt matter more than
+latency; for a quick opinion, one good prompt is fine.
+
 ## Install
 
 Python 3.11+.
@@ -530,8 +574,7 @@ core of a tailored deployment. Boards and seats stay YAML in git; the engine sta
 
 Next, in this order:
 
-1. **Evaluation.** The board against a single well-prompted frontier model on 20 ideas, blind-judged.
-   The table goes in this README whatever it says. This decides whether the board pattern earns its cost.
+1. ~~**Evaluation.**~~ Shipped 1 October 2026: see [Evaluation](#evaluation-does-a-board-beat-one-well-prompted-model). Board 13, single 0, split 7; about one point better at twice the cost.
 2. ~~**Grounding, two kinds, both optional.**~~ Shipped: see [Grounding](#grounding-sources-a-seat-may-cite). A `grounding:` list per seat naming the sources it may cite.
    *Canon*: a curated local library (books, papers, industry reports) indexed on your machine; the
    indexer and the reading list ship, the texts never do. *Company*: ADRs, standards, past decisions,

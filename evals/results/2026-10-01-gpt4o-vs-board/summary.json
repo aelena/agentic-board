@@ -1,0 +1,39 @@
+{
+  "board": "startup",
+  "model": "openai/gpt-4o",
+  "judge": "openai/gpt-4.1",
+  "dry_run": false,
+  "ideas": 20,
+  "wins": {
+    "board": 13,
+    "single": 0,
+    "tie": 0,
+    "split": 7,
+    "error": 0
+  },
+  "mean_scores": {
+    "board": {
+      "specificity": 8.88,
+      "coverage": 9.65,
+      "actionability": 9.07,
+      "honesty": 9.78,
+      "overall": 9.6
+    },
+    "single": {
+      "specificity": 7.83,
+      "coverage": 8.75,
+      "actionability": 8.03,
+      "honesty": 8.93,
+      "overall": 8.38
+    }
+  },
+  "mean_seconds": {
+    "board": 28.43,
+    "single": 15.29
+  },
+  "mean_approx_output_tokens": {
+    "board": 3327.65,
+    "single": 2224.8
+  },
+  "mean_board_agent_calls": 12
+}
